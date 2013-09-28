@@ -1,5 +1,6 @@
 #coding=utf8
 # virtualenv test_py2
+import sys
 import pandas
 import numpy as np
 from pyqtgraph.Qt import QtGui, QtCore
@@ -20,6 +21,8 @@ logger.addHandler(handler)
 # y: population, burden, economy
 # x: birth, death, ecocide, regeneration,  economicgrowth
 # u: birthrate, deathrate, regenerationrate, burdenrate, economyaim, growthrate
+
+qt_app = QtGui.QApplication(sys.argv)
 
 class WorldSimple(object):
     def __init__(self,birthrate=0.03,deathrate=0.01,regenerationrate=0.1,
@@ -119,17 +122,14 @@ class WorldSimple(object):
         res['time'] = self.time
         return res
 
-class WorldSimpleGui(object):
+class WorldSimpleGui(QtGui.QWidget):
     def __init__(self):
+        super(WorldSimpleGui,self).__init__()
         self.world = WorldSimple()
+        self.layout = QtGui.QGridLayout()
         # set up the app and widgets
-        win = pg.GraphicsWindow(title="very simple World Model")
-        layout = QtGui.QGridLayout()
-        win.setLayout(layout)
-        text = QtGui.QLineEdit('enter text')
-        layout.addWidget(text, 0, 1)
         plot = pg.PlotWidget()
-        layout.addWidget(plot, 0, 0)
+        self.layout.addWidget(plot,0,0)
         # initial solution and plotting
         r = self.world.solve()
         self.population_plot = pg.PlotCurveItem(
@@ -155,13 +155,41 @@ class WorldSimpleGui(object):
         self.params.sigTreeStateChanged.connect(self.change)
         self.tree = ParameterTree()
         self.tree.setParameters(self.params, showTop=False)
-        # show the app and the parameter tree
-        self.tree.show()
+        self.setLayout(self.layout)
         # add a slider
-        #slider = win.addTickSliderItem()
+        self.addParameter(1,'birthrate')
 
-        # start the main loop
-        QtGui.QApplication.instance().exec_()
+    @QtCore.pyqtProperty(int)
+    def testp(self):
+        return self._testp
+
+    @testp.setter
+    def testp(self,value):
+        self._testp = value
+
+
+    def addParameter(self,value,name,xmax=10,scale=1.0,xmin=0,step=1):
+        # Slider only support integer ranges so use ms as base unit
+        groupbox = QtGui.QGroupBox(name,parent=self)
+        layout = QtGui.QVBoxLayout()
+        smin, smax = xmin*scale, xmax*scale
+        slider = QtGui.QSlider(QtCore.Qt.Horizontal, parent=groupbox)
+        slider.setTickPosition(QtGui.QSlider.TicksAbove)
+        slider.setTickInterval((smax-smin)/10.)
+        slider.setMinimum(smin)
+        slider.setMaximum(smax-step*scale)
+        slider.setSingleStep(step*scale/5.)
+        slider.setPageStep(step*scale)
+        slider.setValue(value)  # set the initial position
+        slider.valueChanged.connect(self.testp)
+        layout.addWidget(slider)
+        groupbox.setLayout(layout)
+        self.layout.addWidget(groupbox)
+
+    def run(self):
+        self.tree.show()
+        self.show()
+        qt_app.exec_()
 
     def change(self,param, changes):
         for parama, change, data in changes:
@@ -177,4 +205,5 @@ if __name__ == '__main__':
     #main_old()
     #app = pg.mkQApp()
     m = WorldSimpleGui()
+    m.run()
     #app.exec_()
