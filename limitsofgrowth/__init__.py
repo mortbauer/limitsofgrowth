@@ -33,6 +33,72 @@ class WorldSimple(object):
         self.resolution = resolution
         self.time = np.linspace(0,100,resolution)
 
+    @property
+    def birthrate(self):
+        return self._birthrate
+
+    @birthrate.setter
+    def birthrate(self,value):
+        if value <= 0:
+            logger.warn('birthrate smaller or equal 0 is not allowed')
+        else:
+            self._birthrate = value
+
+    @property
+    def deathrate(self):
+        return self._deathrate
+
+    @deathrate.setter
+    def deathrate(self,value):
+        if value <= 0:
+            logger.warn('deathrate smaller or equal 0 is not allowed')
+        else:
+            self._deathrate = value
+
+    @property
+    def regenartionrate(self):
+        return self._regenartionrate
+
+    @regenartionrate.setter
+    def regenartionrate(self,value):
+        if value <= 0:
+            logger.warn('regenartionrate smaller or equal 0 is not allowed')
+        else:
+            self._regenartionrate = value
+
+    @property
+    def burdenrate(self):
+        return self._burdenrate
+
+    @burdenrate.setter
+    def burdenrate(self,value):
+        if value <= 0:
+            logger.warn('burdenrate smaller or equal 0 is not allowed')
+        else:
+            self._burdenrate = value
+
+    @property
+    def economyaim(self):
+        return self._economyaim
+
+    @economyaim.setter
+    def economyaim(self,value):
+        if value <= 0:
+            logger.warn('economyaim smaller or equal 0 is not allowed')
+        else:
+            self._economyaim = value
+
+    @property
+    def growthrate(self):
+        return self._growthrate
+
+    @growthrate.setter
+    def growthrate(self,value):
+        if value <= 0:
+            logger.warn('growthrate smaller or equal 0 is not allowed')
+        else:
+            self._growthrate = value
+
     def dx(self,x,time):
         population,burden,economy = x
         quality = burden**(-1)
@@ -100,15 +166,8 @@ class WorldSimpleGui(object):
     def change(self,param, changes):
         for parama, change, data in changes:
             path = self.params.childPath(parama)
-            if data <= 0:
-                logger.warn('{0} smaller or equal 0 is not allowed'.format(path[-1]))
-                setattr(self.world,path[-1],1)
-            else:
-                setattr(self.world,path[-1],data)
-            print(path[-1],change,data)
+            setattr(self.world,path[-1],data)
         r = self.world.solve()
-        print(r['population'].iloc[-1])
-        print('##############')
         self.population_plot.setData(r['time'],r['population'])
         self.burden_plot.setData(r['time'],r['burden'])
         self.economy_plot.setData(r['time'],r['economy'])
