@@ -31,7 +31,7 @@ class WorldSimple(object):
         self.economyaim = economyaim
         self.growthrate = growthrate
         self.resolution = resolution
-        self.time = np.linspace(0,250,resolution)
+        self.time = np.linspace(0,100,resolution)
 
     def dx(self,x,time):
         population,burden,economy = x
@@ -42,7 +42,7 @@ class WorldSimple(object):
         if quality > 1:
             regeneration = self.regenerationrate * burden
         else:
-            self.regenerationrate
+            regeneration = self.regenerationrate
         economicgrowth = self.growthrate * economy * burden \
                 * (1-(economy*burden)/self.economyaim)
         return np.array([birth-death,ecocide-regeneration,economicgrowth])
@@ -65,7 +65,7 @@ class WorldSimpleGui(object):
         plot = pg.PlotWidget()
         layout.addWidget(plot, 0, 0)
         # initial solution and plotting
-        self._r = r = self.world.solve()
+        r = self.world.solve()
         self.population_plot = pg.PlotCurveItem(
             r['time'],r['population'],pen=(255,0,0),name='population')
         self.burden_plot = pg.PlotCurveItem(
@@ -98,15 +98,17 @@ class WorldSimpleGui(object):
         QtGui.QApplication.instance().exec_()
 
     def change(self,param, changes):
-        print('##############')
         for parama, change, data in changes:
             path = self.params.childPath(parama)
             if data <= 0:
-                self.logger.warn('{0} smaller 0 is not allowed'.format(path[-1]))
-                setattr(self,path[-1],1)
+                logger.warn('{0} smaller or equal 0 is not allowed'.format(path[-1]))
+                setattr(self.world,path[-1],1)
             else:
-                setattr(self,path[-1],data)
-        self._r = r = self.world.solve()
+                setattr(self.world,path[-1],data)
+            print(path[-1],change,data)
+        r = self.world.solve()
+        print(r['population'].iloc[-1])
+        print('##############')
         self.population_plot.setData(r['time'],r['population'])
         self.burden_plot.setData(r['time'],r['burden'])
         self.economy_plot.setData(r['time'],r['economy'])
@@ -114,6 +116,6 @@ class WorldSimpleGui(object):
 
 if __name__ == '__main__':
     #main_old()
-    app = pg.mkQApp()
-    m = WorldSimpleGui
-    app.exec_()
+    #app = pg.mkQApp()
+    m = WorldSimpleGui()
+    #app.exec_()
