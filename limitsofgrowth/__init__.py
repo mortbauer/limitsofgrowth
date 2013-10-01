@@ -29,7 +29,7 @@ class WorldSimple(object):
         self.economyaim = economyaim
         self.growthrate = growthrate
         self.resolution = resolution
-        self.time = np.linspace(0,100,resolution)
+        self.time = np.linspace(0,250,resolution)
 
     def dx(self,x,time):
         population,burden,economy = x
@@ -52,8 +52,10 @@ class WorldSimple(object):
     def solve(self):
         res,info = self._solve()
         if info['message'] == "Integration successful.":
-            return pandas.DataFrame(res,
-                columns=['population','burden','economy'],index=self.time)
+            res = pandas.DataFrame(res,
+                columns=['population','burden','economy'])
+            res['time'] = self.time
+            return res
 
 class DataFramePlot(object):
     def __init__(self,plotwidget):
@@ -62,24 +64,27 @@ class DataFramePlot(object):
         self.plotwidget = plotwidget
         self.legend = plotwidget.addLegend()
 
+
+    def addItem(self,dataframe,column):
+        self.plots[column] = self.plotwidget.plotItem.plot(
+            dataframe['time'],dataframe[column].values)
+        #,symbol='-',
+            #pen=tuple(self.colorwheel.next().rgb),name=column
+            #)
+        #self.plotwidget.addItem(self.plots[column])
+
     def create_plots(self,dataframe):
         for column in dataframe:
-            self.plots[column] = pg.PlotCurveItem(
-                dataframe.index,dataframe[column],
-                pen=tuple(self.colorwheel.next().rgb),name=column,label=column,
-            )
-            self.plotwidget.addItem(self.plots[column])
+            if column != 'time':
+                self.addItem(dataframe,column)
 
     def update_plots(self,dataframe):
         for column in dataframe:
-            if not column in self.plots:
-                self.plots[column] = pg.PlotCurveItem(
-                    dataframe.index,dataframe[column],
-                    pen=tuple(self.colorwheel.next().rgb),name=column
-                )
-                self.plotwidget.addItem(self.plots[column])
-            else:
-                self.plots[column].setData(dataframe.index,dataframe[column])
+            if column != 'time':
+                if not column in self.plots:
+                    self.addItem(dataframe,column)
+                else:
+                    self.plots[column].setData(dataframe.index,dataframe[column])
 
 class Parameter(QtGui.QGroupBox):
     def __init__(self,name,value=1,xmin=0,xmax=10,step=1.0):
@@ -89,7 +94,6 @@ class Parameter(QtGui.QGroupBox):
         layout = QtGui.QHBoxLayout()
         self.slider = QtGui.QSlider(QtCore.Qt.Horizontal, parent=self)
         neededsteps = (xmax-xmin)/step
-        print(neededsteps)
         self.max = xmax
         self.min = xmin
         self.step = step
