@@ -46,6 +46,12 @@ class WorldSimple(object):
         return np.array([birth-death,ecocide-regeneration,economicgrowth])
 
     def _solve(self,x0=[1,1,1]):
+        print('birthrate',self.birthrate)
+        print('deathrate',self.deathrate)
+        print('regenerationrate',self.regenerationrate)
+        print('burdenrate',self.burdenrate)
+        print('economyaim',self.economyaim)
+        print('growthrate',self.growthrate)
         return odeint(self.dx,x0,self.time,
                       full_output=True,printmessg=False,mxhnil=0)
 
@@ -67,10 +73,9 @@ class DataFramePlot(object):
 
     def addItem(self,dataframe,column):
         self.plots[column] = self.plotwidget.plotItem.plot(
-            dataframe['time'],dataframe[column].values)
-        #,symbol='-',
-            #pen=tuple(self.colorwheel.next().rgb),name=column
-            #)
+            dataframe['time'].values,dataframe[column].values,
+            pen=tuple(self.colorwheel.next().rgb),name=column
+        )
         #self.plotwidget.addItem(self.plots[column])
 
     def create_plots(self,dataframe):
