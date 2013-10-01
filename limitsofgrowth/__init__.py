@@ -20,43 +20,35 @@ logger.addHandler(handler)
 qt_app = QtGui.QApplication(sys.argv)
 
 class WorldSimple(object):
-    def __init__(self,birthrate=0.03,deathrate=0.01,regenerationrate=0.1,
-                 burdenrate=0.02,economyaim=1,growthrate=0.05,resolution=1e5):
-        self.birthrate = birthrate
-        self.deathrate = deathrate
-        self.regenerationrate = regenerationrate
-        self.burdenrate = burdenrate
-        self.economyaim = economyaim
-        self.growthrate = growthrate
-        self.resolution = resolution
+    params = {'birthrate':{'initial':0.03,'max':1,'min':0},
+              'deathrate':{'initial':0.01,'max':1,'min':0},
+              'regenerationrate':{'initial':0.1,'max':1,'min':0},
+              'burdenrate':{'initial':0.02,'max':1,'min':0},
+              'economyaim':{'initial':10,'max':100,'min':0},
+              'growthrate':{'initial':0.05,'max':1,'min':0}}
+
+    def __init__(self,resolution=1e5):
         self.time = np.linspace(0,250,resolution)
 
-    def dx(self,x,time):
+    @staticmethod
+    def dx(x,time,params):
         population,burden,economy = x
         quality = burden**(-1)
-        birth = self.birthrate * population * quality * economy
-        death = population * self.deathrate * burden
-        ecocide = self.burdenrate * economy * population
+        birth = params['birthrate'] * population * quality * economy
+        death = population * params['deathrate'] * burden
+        ecocide = params['burdenrate'] * economy * population
         if quality > 1:
-            regeneration = self.regenerationrate * burden
+            regeneration = params['regenerationrate'] * burden
         else:
-            regeneration = self.regenerationrate
-        economicgrowth = self.growthrate * economy * burden \
-                * (1-(economy*burden)/self.economyaim)
+            regeneration = params['regenerationrate']
+        economicgrowth = params['growthrate'] * economy * burden \
+                * (1-(economy*burden)/params['economyaim'])
         return np.array([birth-death,ecocide-regeneration,economicgrowth])
 
-    def _solve(self,x0=[1,1,1]):
-        print('birthrate',self.birthrate)
-        print('deathrate',self.deathrate)
-        print('regenerationrate',self.regenerationrate)
-        print('burdenrate',self.burdenrate)
-        print('economyaim',self.economyaim)
-        print('growthrate',self.growthrate)
-        return odeint(self.dx,x0,self.time,
-                      full_output=True,printmessg=False,mxhnil=0)
 
-    def solve(self):
-        res,info = self._solve()
+    def solve(self,params):
+        res,info = odeint(self.dx,[1.0,1.0,1.0],self.time,args=(params,),
+                      full_output=True,printmessg=False,mxhnil=0)
         if info['message'] == "Integration successful.":
             res = pandas.DataFrame(res,
                 columns=['population','burden','economy'])
@@ -66,7 +58,7 @@ class WorldSimple(object):
 class DataFramePlot(object):
     def __init__(self,plotwidget):
         self.plots = {}
-        self.colorwheel = ColorWheel()
+        self.colorwheel = ColorWheel(start=0.6)
         self.plotwidget = plotwidget
         self.legend = plotwidget.addLegend()
 
@@ -89,7 +81,7 @@ class DataFramePlot(object):
                 if not column in self.plots:
                     self.addItem(dataframe,column)
                 else:
-                    self.plots[column].setData(dataframe.index,dataframe[column])
+                    self.plots[column].setData(dataframe['time'],dataframe[column])
 
 class Parameter(QtGui.QGroupBox):
     def __init__(self,name,value=1,xmin=0,xmax=10,step=1.0):
@@ -105,6 +97,8 @@ class Parameter(QtGui.QGroupBox):
         self.slider.setRange(0,neededsteps)
         self.slider.setValue((value-xmin)/step)  # set the initial position
         self.slider.setPageStep(neededsteps/10)
+        self.slider.setTickInterval(neededsteps/10)
+        self.slider.setTickPosition(QtGui.QSlider.TicksBelow)
         self.textbox = QtGui.QLineEdit()
         self.textbox.setMaxLength(30)
         self.textbox.setFixedWidth(60)
@@ -129,37 +123,51 @@ class Parameter(QtGui.QGroupBox):
             self.slider.setValue((self.value-self.min)/self.step)
             self.valueChanged.emit(self.param_name,self.value)
 
-class WorldSimpleGui(object):
+class WorldSimpleGui(pg.PlotWidget):
     """ segementation fault bug, see:
         https://groups.google.com/d/msg/pyqtgraph/juoqAiXABYY/BYpvCQeWSgMJ
     """
     def __init__(self):
-        self.plotwin = pg.PlotWindow(title="Simple Limits of Growth World Model")
-        self.plotwin.resize(1000,600)
+        super(WorldSimpleGui,self).__init__()
+        self.win = QtGui.QMainWindow()
+        self.win.setCentralWidget(self)
+        self.win.setWindowTitle("Simple Limits of Growth World Model")
+        self.win.closeEvent = self.closeEvent
+        self.win.resize(1000,600)
         self.world = WorldSimple(resolution=1000)
         # initial solution and plotting
-        self.dataframeplot = DataFramePlot(self.plotwin)
-        self.dataframeplot.create_plots(self.world.solve())
         self.controllerwin = QtGui.QWidget()
+        self.controllerwin.resize(300,self.controllerwin.height())
+        self.controllerwin.move(1100,0)
+        self.controllerwin.closeEvent = self.closeEvent
         self.controllerwin.setWindowTitle('Parameters')
+        self.params = {}
         layout = QtGui.QVBoxLayout()
-        for param in ('birthrate','deathrate','regenerationrate',
-                      'burdenrate','economyaim','growthrate'):
-            slider = Parameter(param,step=0.01)
+        for param in self.world.params:
+            d = self.world.params[param]
+            self.params[param] = d['initial']
+            slider = Parameter(param,value=d['initial'],
+                               xmin=d['min'],xmax=d['max'],step=0.01)
             slider.valueChanged.connect(self.change)
             layout.addWidget(slider)
+        self.dataframeplot = DataFramePlot(self)
+        self.dataframeplot.create_plots(self.world.solve(self.params))
         self.controllerwin.setLayout(layout)
 
+    def closeEvent(self,event):
+        self.controllerwin.close()
+        self.win.close()
+
     def run(self):
-        self.plotwin.show()
+        self.win.show()
         self.controllerwin.show()
         qt_app.exec_()
 
     def change(self,param, value):
-        oldvalue = getattr(self.world,str(param))
-        setattr(self.world,str(param),value)
+        oldvalue = self.params[str(param)]
+        self.params[str(param)] = value
         t1 = time.time()
-        res = self.world.solve()
+        res = self.world.solve(self.params)
         if res:
             self.dataframeplot.update_plots(res)
             logger.info('recalculated in {0}s'.format(time.time()-t1))
