@@ -115,12 +115,12 @@ class Parameter(QtGui.QGroupBox):
         self.textbox.setMaxLength(30)
         self.textbox.setFixedWidth(60)
         self.textbox.setText(str(value))
-        self.textbox.setValidator(QtGui.QIntValidator(0,neededsteps))
+        self.textbox.setValidator(QtGui.QDoubleValidator(0.0,float(neededsteps),3))
         layout.addWidget(self.textbox)
         layout.addWidget(self.slider)
         self.setLayout(layout)
         self.slider.valueChanged.connect(self.on_value_slider_changed)
-        self.textbox.textChanged.connect(self.on_value_textbox_changed)
+        self.textbox.editingFinished.connect(self.on_value_textbox_changed)
 
     valueChanged = QtCore.pyqtSignal(str,float)
 
@@ -129,7 +129,8 @@ class Parameter(QtGui.QGroupBox):
         self.textbox.setText(str(self.value))
         self.valueChanged.emit(self.param_name,self.value)
 
-    def on_value_textbox_changed(self,value):
+    def on_value_textbox_changed(self):
+        value = str(self.textbox.text())
         if value:
             self.value = float(value)
             self.slider.setValue((self.value-self.min)/self.step)
