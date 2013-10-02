@@ -1,0 +1,53 @@
+# German translations for PACKAGE package.
+# Copyright (C) 2013 ORGANIZATION
+#  <martin@mortbauer>, 2013.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: PACKAGE VERSION\n"
+"POT-Creation-Date: 2013-10-02 12:04+UTC\n"
+"PO-Revision-Date: 2013-10-02 12:04+0000\n"
+"Last-Translator:  <martin@mortbauer>\n"
+"Language-Team: German\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Generated-By: pygettext.py 1.5\n"
+"Language: de_AT\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+#: __init__.py:30
+msgid "birthrate"
+msgstr "Geburtenrate"
+
+#: __init__.py:31
+msgid "deathrate"
+msgstr "Sterberate"
+
+#: __init__.py:32
+msgid "regenerationrate"
+msgstr "Regenerationsrate"
+
+#: __init__.py:33
+msgid "burdenrate"
+msgstr "Belastungsrate"
+
+#: __init__.py:34
+msgid "economyaim"
+msgstr "Wirtschaftsziel"
+
+#: __init__.py:35
+msgid "growthrate"
+msgstr "Zuwachsrate"
+
+#: __init__.py:36
+msgid "population"
+msgstr "Bevölkerung"
+
+#: __init__.py:37
+msgid "burden"
+msgstr "Umweltbelastung"
+
+#: __init__.py:38
+msgid "economy"
+msgstr "Wirtschaft"

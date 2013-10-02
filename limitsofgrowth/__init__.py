@@ -1,5 +1,6 @@
 #coding=utf8
 # virtualenv test_py2
+import os
 import sys
 import time
 import pandas
@@ -9,6 +10,8 @@ from pyqtgraph.Qt import QtGui, QtCore
 import pyqtgraph as pg
 import logging
 from scipy.integrate import ode, odeint
+import gettext
+import locale
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.WARN)
@@ -17,7 +20,16 @@ formatter = logging.Formatter('[%(levelname)s] %(message)s')
 handler.setFormatter(formatter)
 logger.addHandler(handler)
 
+try:
+    t = gettext.translation('limitsofgrowth', os.path.abspath('../data/locale/'))
+except:
+    t = gettext.NullTranslations()
+
+_ = t.ugettext
+
+
 qt_app = QtGui.QApplication(sys.argv)
+
 
 class WorldSimple(object):
     params = {'birthrate':{'initial':0.03,'max':1,'min':0},
@@ -66,7 +78,7 @@ class DataFramePlot(object):
     def addItem(self,dataframe,column):
         self.plots[column] = self.plotwidget.plotItem.plot(
             dataframe['time'].values,dataframe[column].values,
-            pen=tuple(self.colorwheel.next().rgb),name=column
+            pen=tuple(self.colorwheel.next().rgb),name=_(column)
         )
         #self.plotwidget.addItem(self.plots[column])
 
@@ -85,7 +97,7 @@ class DataFramePlot(object):
 
 class Parameter(QtGui.QGroupBox):
     def __init__(self,name,value=1,xmin=0,xmax=10,step=1.0):
-        super(Parameter,self).__init__(name)
+        super(Parameter,self).__init__(_(name))
         self.param_name = name
         self.value = value
         layout = QtGui.QHBoxLayout()
