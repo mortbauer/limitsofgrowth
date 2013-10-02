@@ -141,6 +141,10 @@ class WorldSimpleGui(pg.PlotWidget):
         self.controllerwin.move(1100,0)
         self.controllerwin.closeEvent = self.closeEvent
         self.controllerwin.setWindowTitle('Parameters')
+        self.shcut1 = QtGui.QShortcut(self.win)
+        self.shcut1.setKey("F11")
+        self.connect(self.shcut1, QtCore.SIGNAL("activated()"), self.toogleFullscreen)
+
         self.params = {}
         layout = QtGui.QVBoxLayout()
         for param in self.world.params:
@@ -153,6 +157,12 @@ class WorldSimpleGui(pg.PlotWidget):
         self.dataframeplot = DataFramePlot(self)
         self.dataframeplot.create_plots(self.world.solve(self.params))
         self.controllerwin.setLayout(layout)
+
+    def toogleFullscreen(self):
+        if self.win.isFullScreen():
+            self.win.showNormal()
+        else:
+            self.win.showFullScreen()
 
     def closeEvent(self,event):
         self.controllerwin.close()
