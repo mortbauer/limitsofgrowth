@@ -39,11 +39,15 @@ class WorldSimple(object):
               'economyaim':{'initial':10,'max':100,'min':0},
               'growthrate':{'initial':0.05,'max':1,'min':0}}
 
+    cols = ['population','burden','economy']
     def __init__(self,resolution=1e5):
         self.time = np.linspace(0,250,resolution)
 
     @staticmethod
-    def dx(x,time,params):
+    def dx(time,x,params):
+        """
+        the change of the system variables population, burden and economy
+        """
         population,burden,economy = x
         quality = burden**(-1)
         birth = params['birthrate'] * population * quality * economy
@@ -57,15 +61,74 @@ class WorldSimple(object):
                 * (1-(economy*burden)/params['economyaim'])
         return np.array([birth-death,ecocide-regeneration,economicgrowth])
 
-
-    def solve(self,params):
-        res,info = odeint(self.dx,[1.0,1.0,1.0],self.time,args=(params,),
+    def x(self,params):
+        res,info = odeint(lambda x,t,*args:self.dx(t,x,*args),[1.0,1.0,1.0],self.time,args=(params,),
                       full_output=True,printmessg=False,mxhnil=0)
         if info['message'] == "Integration successful.":
-            res = pandas.DataFrame(res,
+            dataframe = pandas.DataFrame(res,
                 columns=['population','burden','economy'])
-            res['time'] = self.time
-            return res
+            dataframe['time'] = self.time
+            return dataframe
+
+    @staticmethod
+    def ds(time,s1d,p,x):
+        """
+        the change of sensitivities of the system variables
+        """
+        # since the ode solver only work with 1 dimensional arrays, lets just
+        # internaly work with multidimensional arrays
+        s = s1d.reshape((3,6))
+        population,burden,economy = x
+        fnachx = np.array([
+            [p['birthrate']/burden*economy-p['deathrate']*burden,
+             p['birthrate']*population*(-1)/burden**2*economy-population*p['deathrate'],
+             p['birthrate']*population/burden],
+            [p['burdenrate']*economy,
+             p['regenerationrate'] if burden < 1 else 0,
+             p['burdenrate']*population],
+            [0,
+             p['growthrate']*economy-2*p['growthrate']*economy**2*burden/p['economyaim'],
+             p['growthrate']*burden-2*p['growthrate']*burden**2*economy/p['economyaim']]
+        ])
+
+        fnachp = np.array([
+            [population*burden*economy,
+             - population+burden,0,0,0,0],
+            [0,0,-burden if burden<1 else -1,
+             economy*population,0,0],
+            [0,0,0,0,p['growthrate']*economy**2*burden**2/p['economyaim']**2,
+             p['economyaim']*burden*(1-(economy*burden/p['economyaim']))]
+        ])
+        return (fnachx.dot(s)+fnachp).reshape((18,))
+
+    def s(self,params):
+        x0 = np.ones(3)
+        s0 = np.zeros(18)
+        solver_x = ode(self.dx).set_integrator('dopri5')
+        solver_x.set_initial_value(x0,0).set_f_params(params,)
+
+        solver_s = ode(self.ds).set_integrator('dopri5')
+        solver_s.set_initial_value(s0,0).set_f_params(params,x0)
+
+        dt = 1
+        t1 = 250
+        sensitivities = []
+        for column in self.cols:
+            for param in self.params:
+                sensitivities.append('{0},{1}'.format(column,param))
+        sol = pandas.DataFrame(np.empty((t1/dt,22)),columns=self.cols+sensitivities+['time'])
+        i = 0
+        #return solver_x,solver_s
+        while solver_x.successful() and solver_s.successful() and solver_x.t < t1:
+            solver_x.integrate(solver_x.t+dt)
+            sol.iloc[i][self.cols] = solver_x.y
+            sol.iloc[i]['time'] = solver_x.t
+            solver_s.set_f_params(params,solver_x.y)
+            solver_s.integrate(solver_s.t+dt)
+            sol.iloc[i][sensitivities] = solver_s.y
+            i += 1
+        return sol
+
 
 class DataFramePlot(object):
     def __init__(self,plotwidget):
@@ -168,7 +231,7 @@ class WorldSimpleGui(pg.PlotWidget):
             slider.valueChanged.connect(self.change)
             layout.addWidget(slider)
         self.dataframeplot = DataFramePlot(self)
-        self.dataframeplot.create_plots(self.world.solve(self.params))
+        self.dataframeplot.create_plots(self.world.x(self.params))
         self.controllerwin.setLayout(layout)
 
     def toogleFullscreen(self):
@@ -190,7 +253,7 @@ class WorldSimpleGui(pg.PlotWidget):
         oldvalue = self.params[str(param)]
         self.params[str(param)] = value
         t1 = time.time()
-        res = self.world.solve(self.params)
+        res = self.world.x(self.params)
         if res:
             self.dataframeplot.update_plots(res)
             logger.info('recalculated in {0}s'.format(time.time()-t1))
