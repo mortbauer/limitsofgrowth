@@ -2,10 +2,10 @@
 
 from setuptools import setup
 
-setup(name='limitsofgroth',
+setup(name='limitsofgrowth',
       entry_points = {
           'console_scripts' :
-              ['limitsofgrowth = limitsofgrowth.main:main',
+              ['limitsofgrowth = limitsofgrowth:main',
                ]},
       version='0.0.0',
       description='A simple World Model, after J.W. Forrester',
@@ -16,7 +16,8 @@ setup(name='limitsofgroth',
       license='MIT',
       packages=['limitsofgrowth'],
       install_requires=['pyqtgraph'],
-      package_data={'limitsofgrowth':['data/default.conf']},
+      package_data={'limitsofgrowth':['data/locale/de/LC_MESSAGES/limitsofgrowth.mo','data/sensitivityanalysis.png']},
+      zip_safe=False,
       classifiers=[
         'Development Status :: Alpha',
         'Topic :: Text Processing :: Markup',

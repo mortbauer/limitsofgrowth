@@ -8,12 +8,18 @@ import numpy as np
 from colors import ColorWheel
 from pyqtgraph.Qt import QtGui, QtCore
 import pyqtgraph as pg
+
+import matplotlib
+from matplotlib.backends.backend_qt4agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.backends.backend_qt4agg import NavigationToolbar2QTAgg as NavigationToolbar
+from matplotlib.figure import Figure
 import logging
 from scipy.integrate import ode, odeint
 import gettext
 import locale
 from assimulo.problem import Explicit_Problem
 from assimulo.solvers import CVode
+from pkg_resources import resource_filename
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +36,7 @@ console_handler.setLevel(logging.WARN)
 logger.addHandler(console_handler)
 
 try:
-    t = gettext.translation('limitsofgrowth', os.path.abspath('../data/locale/'))
+    t = gettext.translation('limitsofgrowth',resource_filename(__name__,'data/locale/'))
 except:
     t = gettext.NullTranslations()
 
@@ -197,7 +203,7 @@ class WorldSimple(object):
                 ('birthrate','deathrate','regenerationrate',
                  'burdenrate','economyaim','growthrate')):
                 d['{0},{1}'.format(col,param)] = sens[j,:,i]
-        dataframe_sens = pandas.DataFrame(d)
+        dataframe_sens = pandas.DataFrame(d,index=self.time)
         dataframe_sens['time'] = self.time
         return dataframe,dataframe_sens
 
@@ -228,7 +234,6 @@ class WorldSimple(object):
             sol.iloc[i][sensitivities] = solver_s.y
             i += 1
         return sol
-
 
 class DataFramePlot(object):
     def __init__(self,plotwidget):
@@ -298,6 +303,99 @@ class Parameter(QtGui.QGroupBox):
             self.slider.setValue((self.value-self.min)/self.step)
             self.valueChanged.emit(self.param_name,self.value)
 
+class MatplotlibPlot(QtGui.QWidget):
+    def __init__(self):
+        super(MatplotlibPlot,self).__init__()
+        self.create_main_frame()
+
+    def on_draw(self):
+        """ Redraws the figure
+        """
+        # clear the axes and redraw the plot anew
+        #
+        self.axes.clear()
+        for column in self.dataframe:
+            self.axes.plot(self.dataframe.index,self.dataframe[column].values,label=column)
+        self.axes.legend()
+        self.canvas.draw()
+
+    def on_pick(self, event):
+        # The event received here is of the type
+        # matplotlib.backend_bases.PickEvent
+        #
+        # It carries lots of information, of which we're using
+        # only a small amount here.
+        #
+        box_points = event.artist.get_bbox().get_points()
+        msg = "You've clicked on a bar with coords:\n %s" % box_points
+
+        QtGui.QMessageBox.information(self, "Click!", msg)
+
+    def create_main_frame(self):
+
+        # Create the mpl Figure and FigCanvas objects.
+        # 5x4 inches, 100 dots-per-inch
+        #
+        self.dpi = 100
+        self.fig = Figure((5.0, 4.0), dpi=self.dpi)
+        self.canvas = FigureCanvas(self.fig)
+        self.canvas.setParent(self)
+
+        # Since we have only one plot, we can use add_axes
+        # instead of add_subplot, but then the subplot
+        # configuration tool in the navigation toolbar wouldn't
+        # work.
+        #
+        self.axes = self.fig.add_subplot(111)
+
+        # Bind the 'pick' event for clicking on one of the bars
+        #
+        self.canvas.mpl_connect('pick_event', self.on_pick)
+
+        # Create the navigation toolbar, tied to the canvas
+        #
+        self.mpl_toolbar = NavigationToolbar(self.canvas, self)
+        vbox = QtGui.QVBoxLayout()
+        vbox.addWidget(self.canvas)
+        vbox.addWidget(self.mpl_toolbar)
+        self.setLayout(vbox)
+
+    def add_additional_stuff(self):
+        # Other GUI controls
+        #
+        self.textbox = QtGui.QLineEdit()
+        self.textbox.setMinimumWidth(200)
+        self.textbox.editingFinished.connect(self.on_draw)
+
+        self.draw_button = QtGui.QPushButton("&Draw")
+        self.draw_button.clicked.connect(self.on_draw)
+
+        self.grid_cb = QtGui.QCheckBox("Show &Grid")
+        self.grid_cb.setChecked(False)
+        self.grid_cb.stateChanged.connect(self.on_draw)
+
+        slider_label = QtGui.QLabel('Bar width (%):')
+        self.slider = QtGui.QSlider(QtCore.Qt.Horizontal)
+        self.slider.setRange(1, 100)
+        self.slider.setValue(20)
+        self.slider.setTracking(True)
+        self.slider.setTickPosition(QtGui.QSlider.TicksBothSides)
+        self.slider.valueChanged.connect(self.on_draw)
+
+        #
+        # Layout with box sizers
+        #
+        hbox = QtGui.QHBoxLayout()
+
+        for w in [  self.textbox, self.draw_button, self.grid_cb,
+                    slider_label, self.slider]:
+            hbox.addWidget(w)
+            hbox.setAlignment(w, QtCore.Qt.AlignVCenter)
+
+        vbox = self.layout()
+        vbox.addLayout(hbox)
+
+
 class WorldSimpleGui(pg.PlotWidget):
     """ segementation fault bug, see:
         https://groups.google.com/d/msg/pyqtgraph/juoqAiXABYY/BYpvCQeWSgMJ
@@ -309,6 +407,14 @@ class WorldSimpleGui(pg.PlotWidget):
         self.win.setWindowTitle("Simple Limits of Growth World Model")
         self.win.closeEvent = self.closeEvent
         self.win.resize(1000,600)
+        # create a toolbar
+        sensAction = QtGui.QAction(QtGui.QIcon(
+            resource_filename(
+                __name__,'data/sensitivityanalysis.png')), 'Sensitivity', self)
+        sensAction.setShortcut('Ctrl+S')
+        sensAction.triggered.connect(self.plot_sensitivity)
+        self.toolbar = self.win.addToolBar('Actions')
+        self.toolbar.addAction(sensAction)
         self.world = WorldSimple(resolution=1000)
         # initial solution and plotting
         self.controllerwin = QtGui.QWidget()
@@ -316,9 +422,12 @@ class WorldSimpleGui(pg.PlotWidget):
         self.controllerwin.move(1100,0)
         self.controllerwin.closeEvent = self.closeEvent
         self.controllerwin.setWindowTitle('Parameters')
+        dock = QtGui.QDockWidget('Controllers')
+        dock.setWidget(self.controllerwin)
+        self.win.addDockWidget(QtCore.Qt.RightDockWidgetArea,dock)
         self.shcut1 = QtGui.QShortcut(self.win)
         self.shcut1.setKey("F11")
-        self.connect(self.shcut1, QtCore.SIGNAL("activated()"), self.toogleFullscreen)
+        self.shcut1.activated.connect(self.toogleFullscreen)
 
         self.params = {}
         layout = QtGui.QVBoxLayout()
@@ -333,6 +442,14 @@ class WorldSimpleGui(pg.PlotWidget):
         self.dataframeplot.create_plots(self.world.x_odeint(self.params))
         self.controllerwin.setLayout(layout)
 
+    def plot_sensitivity(self):
+        x,s = self.world.s_cvode_natural(self.params)
+        data = s[['{0},economyaim'.format(x) for x in self.world.cols]]
+        self.p = MatplotlibPlot()
+        self.p.dataframe = data
+        self.p.on_draw()
+        self.p.show()
+
     def toogleFullscreen(self):
         if self.win.isFullScreen():
             self.win.showNormal()
@@ -345,7 +462,7 @@ class WorldSimpleGui(pg.PlotWidget):
 
     def run(self):
         self.win.show()
-        self.controllerwin.show()
+        #self.controllerwin.show()
         qt_app.exec_()
 
     def change(self,param, value):
@@ -359,6 +476,10 @@ class WorldSimpleGui(pg.PlotWidget):
         else:
             logger.warn('failed with parameter "{0}" equal {1}'.format(param,value))
 
-if __name__ == '__main__':
+
+def main():
     m = WorldSimpleGui()
     m.run()
+
+if __name__ == '__main__':
+    main()
