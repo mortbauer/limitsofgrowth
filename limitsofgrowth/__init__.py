@@ -242,10 +242,9 @@ class DataFramePlot(object):
         self.plotwidget = plotwidget
         self.legend = plotwidget.addLegend()
 
-
     def addItem(self,dataframe,column):
         self.plots[column] = self.plotwidget.plotItem.plot(
-            dataframe['time'].values,dataframe[column].values,
+            dataframe.index.values,dataframe[column].values,
             pen=tuple(self.colorwheel.next().rgb),name=_(column)
         )
 
@@ -306,6 +305,7 @@ class Parameter(QtGui.QGroupBox):
 class MatplotlibPlot(QtGui.QWidget):
     def __init__(self):
         super(MatplotlibPlot,self).__init__()
+        self.resize(1000,600)
         self.create_main_frame()
 
     def on_draw(self):
@@ -402,48 +402,58 @@ class WorldSimpleGui(pg.PlotWidget):
     """
     def __init__(self):
         super(WorldSimpleGui,self).__init__()
+        self.world = WorldSimple(resolution=1000)
+        self.create_main_window()
+        self.create_fullscreen_shortcut()
+        self.create_parameter_widget()
+        self.create_main_controls_widget()
+        self.create_initial_plot()
+
+    def create_initial_plot(self):
+        self.parameters = {param:value['initial']
+                            for param,value in self.world.params.items()}
+        self.dataframeplot = DataFramePlot(self)
+        self.dataframeplot.create_plots(self.world.x_odeint(self.parameters))
+
+    def create_main_window(self):
         self.win = QtGui.QMainWindow()
         self.win.setCentralWidget(self)
         self.win.setWindowTitle("Simple Limits of Growth World Model")
-        self.win.closeEvent = self.closeEvent
         self.win.resize(1000,600)
-        # create a toolbar
-        sensAction = QtGui.QAction(QtGui.QIcon(
-            resource_filename(
-                __name__,'data/sensitivityanalysis.png')), 'Sensitivity', self)
-        sensAction.setShortcut('Ctrl+S')
-        sensAction.triggered.connect(self.plot_sensitivity)
-        self.toolbar = self.win.addToolBar('Actions')
-        self.toolbar.addAction(sensAction)
-        self.world = WorldSimple(resolution=1000)
-        # initial solution and plotting
-        self.controllerwin = QtGui.QWidget()
-        self.controllerwin.resize(300,self.controllerwin.height())
-        self.controllerwin.move(1100,0)
-        self.controllerwin.closeEvent = self.closeEvent
-        self.controllerwin.setWindowTitle('Parameters')
+        self.tools = QtGui.QTabWidget()
         dock = QtGui.QDockWidget('Controllers')
-        dock.setWidget(self.controllerwin)
+        dock.setWidget(self.tools)
         self.win.addDockWidget(QtCore.Qt.RightDockWidgetArea,dock)
-        self.shcut1 = QtGui.QShortcut(self.win)
-        self.shcut1.setKey("F11")
-        self.shcut1.activated.connect(self.toogleFullscreen)
 
-        self.params = {}
+    def create_fullscreen_shortcut(self):
+        self.shcut_fullscreen = QtGui.QShortcut(self.win)
+        self.shcut_fullscreen.setKey("F11")
+        self.shcut_fullscreen.activated.connect(self.toogleFullscreen)
+
+    def create_main_controls_widget(self):
+        widget = QtGui.QWidget()
+        widget.resize(300,widget.height())
         layout = QtGui.QVBoxLayout()
-        for param in self.world.params:
-            d = self.world.params[param]
-            self.params[param] = d['initial']
-            slider = Parameter(param,value=d['initial'],
-                               xmin=d['min'],xmax=d['max'],step=0.01)
+        sens_button = QtGui.QPushButton('Sensitivity Analysis')
+        sens_button.clicked.connect(self.plot_sensitivity)
+        layout.addWidget(sens_button)
+        widget.setLayout(layout)
+        self.tools.addTab(widget,'Tasks')
+
+    def create_parameter_widget(self):
+        widget = QtGui.QWidget()
+        widget.resize(300,widget.height())
+        layout = QtGui.QVBoxLayout()
+        for param,value in self.world.params.items():
+            slider = Parameter(param,value=value['initial'],
+                               xmin=value['min'],xmax=value['max'],step=0.01)
             slider.valueChanged.connect(self.change)
             layout.addWidget(slider)
-        self.dataframeplot = DataFramePlot(self)
-        self.dataframeplot.create_plots(self.world.x_odeint(self.params))
-        self.controllerwin.setLayout(layout)
+        widget.setLayout(layout)
+        self.tools.addTab(widget,'Parameters')
 
     def plot_sensitivity(self):
-        x,s = self.world.s_cvode_natural(self.params)
+        x,s = self.world.s_cvode_natural(self.parameters)
         data = s[['{0},economyaim'.format(x) for x in self.world.cols]]
         self.p = MatplotlibPlot()
         self.p.dataframe = data
@@ -456,20 +466,16 @@ class WorldSimpleGui(pg.PlotWidget):
         else:
             self.win.showFullScreen()
 
-    def closeEvent(self,event):
-        self.controllerwin.close()
-        self.win.close()
-
     def run(self):
         self.win.show()
-        #self.controllerwin.show()
+        #self.parameter_widget.show()
         qt_app.exec_()
 
     def change(self,param, value):
-        oldvalue = self.params[str(param)]
-        self.params[str(param)] = value
+        oldvalue = self.parameters[str(param)]
+        self.parameters[str(param)] = value
         t1 = time.time()
-        res = self.world.x_odeint(self.params)
+        res = self.world.x_odeint(self.parameters)
         if res:
             self.dataframeplot.update_plots(res)
             logger.info('recalculated in {0}s'.format(time.time()-t1))
