@@ -12,13 +12,22 @@ import logging
 from scipy.integrate import ode, odeint
 import gettext
 import locale
+from assimulo.problem import Explicit_Problem
+from assimulo.solvers import CVode
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.WARN)
-handler = logging.StreamHandler()
-formatter = logging.Formatter('[%(levelname)s] %(message)s')
-handler.setFormatter(formatter)
-logger.addHandler(handler)
+
+file_formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s')
+file_handler = logging.FileHandler('limitsofgrowth.log')
+file_handler.setFormatter(file_formatter)
+file_handler.setLevel(logging.DEBUG)
+logger.addHandler(file_handler)
+
+console_formatter = logging.Formatter('[%(levelname)s] %(message)s')
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(console_formatter)
+console_handler.setLevel(logging.WARN)
+logger.addHandler(console_handler)
 
 try:
     t = gettext.translation('limitsofgrowth', os.path.abspath('../data/locale/'))
@@ -40,68 +49,159 @@ class WorldSimple(object):
               'growthrate':{'initial':0.05,'max':1,'min':0}}
 
     cols = ['population','burden','economy']
-    def __init__(self,resolution=1e5):
+    def __init__(self,resolution=1e3):
         self.time = np.linspace(0,250,resolution)
+        self.sensitivities = []
+        for column in self.cols:
+            for param in self.params:
+                self.sensitivities.append('{0},{1}'.format(column,param))
 
+    def create_dx(self,params):
+        birthrate = params['birthrate']
+        deathrate = params['deathrate']
+        regenerationrate = params['regenerationrate']
+        burdenrate = params['burdenrate']
+        economyaim = params['economyaim']
+        growthrate = params['growthrate']
+        def func(time,x):
+            """
+            the change of the system variables population, burden and economy
+            x: [population,burden,economy]
+            """
+            quality = x[1]**(-1)
+            birth = birthrate * x[0] * quality * x[2]
+            death = x[0] * deathrate * x[1]
+            ecocide = burdenrate * x[2] * x[0]
+            if quality > 1:
+                regeneration = regenerationrate * x[1]
+            else:
+                regeneration = regenerationrate
+            economicgrowth = growthrate * x[2] * x[1] \
+                    * (1-(x[2]*x[1])/economyaim)
+            return [birth-death,ecocide-regeneration,economicgrowth]
+        return func
     @staticmethod
-    def dx(time,x,params):
+    def dx_with_parameters(time,x,p):
         """
         the change of the system variables population, burden and economy
+        x: [population,burden,economy]
         """
-        population,burden,economy = x
-        quality = burden**(-1)
-        birth = params['birthrate'] * population * quality * economy
-        death = population * params['deathrate'] * burden
-        ecocide = params['burdenrate'] * economy * population
+        quality = x[1]**(-1)
+        birth = p[0] * x[0] * quality * x[2]
+        death = x[0] * p[1] * x[1]
+        ecocide = p[3] * x[2] * x[0]
         if quality > 1:
-            regeneration = params['regenerationrate'] * burden
+            regeneration = p[2] * x[1]
         else:
-            regeneration = params['regenerationrate']
-        economicgrowth = params['growthrate'] * economy * burden \
-                * (1-(economy*burden)/params['economyaim'])
-        return np.array([birth-death,ecocide-regeneration,economicgrowth])
+            regeneration = p[2]
+        economicgrowth = p[5] * x[2] * x[1] \
+                * (1-(x[2]*x[1])/p[4])
+        return [birth-death,ecocide-regeneration,economicgrowth]
 
-    def x(self,params):
-        res,info = odeint(lambda x,t,*args:self.dx(t,x,*args),[1.0,1.0,1.0],self.time,args=(params,),
-                      full_output=True,printmessg=False,mxhnil=0)
+    def x_odeint(self,params):
+        func = self.create_dx(params)
+        res,info = odeint(lambda x,t:func(t,x),[1.0,1.0,1.0], self.time,
+                          full_output=True,printmessg=False,mxhnil=0)
         if info['message'] == "Integration successful.":
             dataframe = pandas.DataFrame(res,
                 columns=['population','burden','economy'])
             dataframe['time'] = self.time
             return dataframe
 
-    @staticmethod
-    def ds(time,s1d,p,x):
-        """
-        the change of sensitivities of the system variables
-        """
-        # since the ode solver only work with 1 dimensional arrays, lets just
-        # internaly work with multidimensional arrays
-        s = s1d.reshape((3,6))
-        population,burden,economy = x
-        fnachx = np.array([
-            [p['birthrate']/burden*economy-p['deathrate']*burden,
-             p['birthrate']*population*(-1)/burden**2*economy-population*p['deathrate'],
-             p['birthrate']*population/burden],
-            [p['burdenrate']*economy,
-             p['regenerationrate'] if burden < 1 else 0,
-             p['burdenrate']*population],
-            [0,
-             p['growthrate']*economy-2*p['growthrate']*economy**2*burden/p['economyaim'],
-             p['growthrate']*burden-2*p['growthrate']*burden**2*economy/p['economyaim']]
-        ])
+    def x_cvode(self,params):
+        problem = Explicit_Problem(self.create_dx(params), [1.0,1.0,1.0],0)
+        sim = CVode(problem)
+        t,x = sim.simulate(250,1000)
+        dataframe = pandas.DataFrame(x,
+                columns=['population','burden','economy'])
+        dataframe['time'] = t
+        return dataframe
 
-        fnachp = np.array([
-            [population*burden*economy,
-             - population+burden,0,0,0,0],
-            [0,0,-burden if burden<1 else -1,
-             economy*population,0,0],
-            [0,0,0,0,p['growthrate']*economy**2*burden**2/p['economyaim']**2,
-             p['economyaim']*burden*(1-(economy*burden/p['economyaim']))]
-        ])
-        return (fnachx.dot(s)+fnachp).reshape((18,))
+    def create_ds(self,params,x):
+        birthrate = params['birthrate']
+        deathrate = params['deathrate']
+        regenerationrate = params['regenerationrate']
+        burdenrate = params['burdenrate']
+        economyaim = params['economyaim']
+        growthrate = params['growthrate']
+        def func(time,s1d):
+            """
+            the change of sensitivities of the system variables
+            """
+            # since the ode solver only work with 1 dimensional arrays, lets just
+            # internaly work with multidimensional arrays
+            # get nearest time index
+            index = (x['time'] - time).abs().argmin()
+            population = x['population'][index]
+            burden = x['burden'][index]
+            economy = x['economy'][index]
+            s = s1d.reshape((3,6))
+            fnachx = np.array([
+                [birthrate/burden*economy-deathrate*burden,
+                birthrate*population*(-1)/burden**2*economy-population*deathrate,
+                birthrate*population/burden],
+                [burdenrate*economy,
+                regenerationrate if burden < 1 else 0,
+                burdenrate*population],
+                [0,
+                growthrate*economy-2*growthrate*economy**2*burden/economyaim,
+                growthrate*burden-2*growthrate*burden**2*economy/economyaim]
+            ])
 
-    def s(self,params):
+            fnachp = np.array([
+                [population*burden*economy,
+                - population+burden,0,0,0,0],
+                [0,0,-burden if burden<1 else -1,
+                economy*population,0,0],
+                [0,0,0,0,growthrate*economy**2*burden**2/economyaim**2,
+                economyaim*burden*(1-(economy*burden/economyaim))]
+            ])
+            return (fnachx.dot(s)+fnachp).reshape((18,))
+        return func
+
+    def s_odeint(self,params):
+        x = self.x_odeint(params)
+        s0 = np.zeros(18)
+        func = self.create_ds(params,x)
+        res,info = odeint(lambda s,t:func(t,s),np.zeros(18), self.time,
+                          full_output=True,printmessg=False,mxhnil=0)
+        if info['message'] == "Integration successful.":
+            dataframe = pandas.DataFrame(res,columns=self.sensitivities)
+            dataframe['time'] = self.time
+            return dataframe
+
+    def s_cvode(self,params):
+        x = self.x_odeint(params)
+        s0 = np.zeros(18)
+        problem = Explicit_Problem(self.create_ds(params,x),s0,0)
+        sim = CVode(problem)
+        t,s = sim.simulate(250,1000)
+        dataframe = pandas.DataFrame(s,columns=self.sensitivities)
+        dataframe['time'] = t
+        return dataframe
+
+    def s_cvode_natural(self,params):
+        problem = Explicit_Problem(self.dx_with_parameters, [1.0,1.0,1.0],0,(
+            params['birthrate'],params['deathrate'],params['regenerationrate'],
+            params['burdenrate'],params['economyaim'],params['growthrate']))
+        sim = CVode(problem)
+        sim.report_continuously = True
+        t,x = sim.simulate(250,self.time.shape[0]-1)
+        dataframe = pandas.DataFrame(x,
+                columns=['population','burden','economy'])
+        dataframe['time'] = self.time
+        d = {}
+        sens = np.array(sim.p_sol)
+        for i,col in enumerate(self.cols):
+            for j,param in enumerate(
+                ('birthrate','deathrate','regenerationrate',
+                 'burdenrate','economyaim','growthrate')):
+                d['{0},{1}'.format(col,param)] = sens[j,:,i]
+        dataframe_sens = pandas.DataFrame(d)
+        dataframe_sens['time'] = self.time
+        return dataframe,dataframe_sens
+
+    def s_ode(self,params):
         x0 = np.ones(3)
         s0 = np.zeros(18)
         solver_x = ode(self.dx).set_integrator('dopri5')
@@ -143,7 +243,6 @@ class DataFramePlot(object):
             dataframe['time'].values,dataframe[column].values,
             pen=tuple(self.colorwheel.next().rgb),name=_(column)
         )
-        #self.plotwidget.addItem(self.plots[column])
 
     def create_plots(self,dataframe):
         for column in dataframe:
@@ -231,7 +330,7 @@ class WorldSimpleGui(pg.PlotWidget):
             slider.valueChanged.connect(self.change)
             layout.addWidget(slider)
         self.dataframeplot = DataFramePlot(self)
-        self.dataframeplot.create_plots(self.world.x(self.params))
+        self.dataframeplot.create_plots(self.world.x_odeint(self.params))
         self.controllerwin.setLayout(layout)
 
     def toogleFullscreen(self):
@@ -253,7 +352,7 @@ class WorldSimpleGui(pg.PlotWidget):
         oldvalue = self.params[str(param)]
         self.params[str(param)] = value
         t1 = time.time()
-        res = self.world.x(self.params)
+        res = self.world.x_odeint(self.params)
         if res:
             self.dataframeplot.update_plots(res)
             logger.info('recalculated in {0}s'.format(time.time()-t1))
