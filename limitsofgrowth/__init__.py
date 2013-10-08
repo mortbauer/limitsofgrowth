@@ -3,6 +3,13 @@
 import os
 import sys
 import time
+from math import log
+import re
+import glob
+import json
+import traversedata
+import requests
+
 import pandas
 import numpy as np
 from colors import ColorWheel
@@ -15,6 +22,8 @@ from matplotlib.backends.backend_qt4agg import NavigationToolbar2QTAgg as Naviga
 from matplotlib.figure import Figure
 import logging
 from scipy.integrate import ode, odeint
+from scipy import optimize
+from numpy import linalg
 import gettext
 import locale
 from assimulo.problem import Explicit_Problem
@@ -54,95 +63,58 @@ class WorldSimple(object):
               'economyaim':{'initial':10,'max':100,'min':0},
               'growthrate':{'initial':0.05,'max':1,'min':0}}
 
+    params_list = ['birthrate','deathrate','regenerationrate',
+                            'burdenrate','economyaim','growthrate']
     cols = ['population','burden','economy']
-    def __init__(self,resolution=1e3):
-        self.time = np.linspace(0,250,resolution)
+
+    reference_data_names = {'population':'SP.POP.TOTL',
+                            'economy':'NY.GDP.MKTP.CD',
+                            'burden':'EN.ATM.CO2E.KT'}
+
+    def __init__(self, resolution=250):
+        self.time = np.arange(1900,1900+250+1,1)
         self.sensitivities = []
+        self.initial = {param:v['initial'] for param,v in self.params.items()}
         for column in self.cols:
             for param in self.params:
                 self.sensitivities.append('{0},{1}'.format(column,param))
 
-    def create_dx(self,params):
-        birthrate = params['birthrate']
-        deathrate = params['deathrate']
-        regenerationrate = params['regenerationrate']
-        burdenrate = params['burdenrate']
-        economyaim = params['economyaim']
-        growthrate = params['growthrate']
+    def create_dx(self,*args):
+        params = args[0]
+        if type(params)== dict:
+            birthrate = params['birthrate']
+            deathrate = params['deathrate']
+            regenerationrate = params['regenerationrate']
+            burdenrate = params['burdenrate']
+            economyaim = params['economyaim']
+            growthrate = params['growthrate']
+        elif len(params) == 6:
+            birthrate = params[0]
+            deathrate = params[1]
+            regenerationrate = params[2]
+            burdenrate = params[3]
+            economyaim = params[4]
+            growthrate = params[5]
+        else:
+            raise Exception('wrong number of arguments')
         def func(time,x):
             """
             the change of the system variables population, burden and economy
             x: [population,burden,economy]
             """
+            population,burden,economy = x
             quality = x[1]**(-1)
-            birth = birthrate * x[0] * quality * x[2]
-            death = x[0] * deathrate * x[1]
-            ecocide = burdenrate * x[2] * x[0]
+            birth = birthrate * population * quality * economy
+            death = population * deathrate * burden
+            ecocide = burdenrate * economy * population
             if quality > 1:
-                regeneration = regenerationrate * x[1]
+                regeneration = regenerationrate * burden
             else:
                 regeneration = regenerationrate
-            economicgrowth = growthrate * x[2] * x[1] \
-                    * (1-(x[2]*x[1])/economyaim)
-            return [birth-death,ecocide-regeneration,economicgrowth]
-        return func
-    @staticmethod
-    def dx_with_parameters(time,x,p):
-        """
-        the change of the system variables population, burden and economy
-        x: [population,burden,economy]
-        """
-        quality = x[1]**(-1)
-        birth = p[0] * x[0] * quality * x[2]
-        death = x[0] * p[1] * x[1]
-        ecocide = p[3] * x[2] * x[0]
-        if quality > 1:
-            regeneration = p[2] * x[1]
-        else:
-            regeneration = p[2]
-        economicgrowth = p[5] * x[2] * x[1] \
-                * (1-(x[2]*x[1])/p[4])
-        return [birth-death,ecocide-regeneration,economicgrowth]
-
-    def x_odeint(self,params):
-        func = self.create_dx(params)
-        res,info = odeint(lambda x,t:func(t,x),[1.0,1.0,1.0], self.time,
-                          full_output=True,printmessg=False,mxhnil=0)
-        if info['message'] == "Integration successful.":
-            dataframe = pandas.DataFrame(res,
-                columns=['population','burden','economy'])
-            dataframe['time'] = self.time
-            return dataframe
-
-    def x_cvode(self,params):
-        problem = Explicit_Problem(self.create_dx(params), [1.0,1.0,1.0],0)
-        sim = CVode(problem)
-        t,x = sim.simulate(250,1000)
-        dataframe = pandas.DataFrame(x,
-                columns=['population','burden','economy'])
-        dataframe['time'] = t
-        return dataframe
-
-    def create_ds(self,params,x):
-        birthrate = params['birthrate']
-        deathrate = params['deathrate']
-        regenerationrate = params['regenerationrate']
-        burdenrate = params['burdenrate']
-        economyaim = params['economyaim']
-        growthrate = params['growthrate']
-        def func(time,s1d):
-            """
-            the change of sensitivities of the system variables
-            """
-            # since the ode solver only work with 1 dimensional arrays, lets just
-            # internaly work with multidimensional arrays
-            # get nearest time index
-            index = (x['time'] - time).abs().argmin()
-            population = x['population'][index]
-            burden = x['burden'][index]
-            economy = x['economy'][index]
-            s = s1d.reshape((3,6))
-            fnachx = np.array([
+            economicgrowth = growthrate * economy * burden \
+                    * (1-(economy*burden)/economyaim)
+            f = lambda : [birth-death,ecocide-regeneration,economicgrowth]
+            fnachx = lambda : np.array([
                 [birthrate/burden*economy-deathrate*burden,
                 birthrate*population*(-1)/burden**2*economy-population*deathrate,
                 birthrate*population/burden],
@@ -153,49 +125,76 @@ class WorldSimple(object):
                 growthrate*economy-2*growthrate*economy**2*burden/economyaim,
                 growthrate*burden-2*growthrate*burden**2*economy/economyaim]
             ])
-
-            fnachp = np.array([
-                [population*burden*economy,
+            fnachp = lambda : np.array([
+                [population/burden*economy,
                 - population+burden,0,0,0,0],
                 [0,0,-burden if burden<1 else -1,
                 economy*population,0,0],
                 [0,0,0,0,growthrate*economy**2*burden**2/economyaim**2,
                 economyaim*burden*(1-(economy*burden/economyaim))]
             ])
-            return (fnachx.dot(s)+fnachp).reshape((18,))
+            return {'f':f,'fx':fnachx,'fp':fnachp}
+        return func
+
+    def x_odeint(self,params):
+        func = self.create_dx(params)
+        res,info = odeint(lambda x,t:func(t,x)['f'](),[1.0,1.0,1.0], self.time,
+                          full_output=True,printmessg=False,mxhnil=0)
+        if info['message'] == "Integration successful.":
+            dataframe = pandas.DataFrame(res,
+                columns=['population','burden','economy'],index=self.time)
+            return dataframe
+
+    def x_cvode(self,params):
+        func = self.create_dx(params)
+        problem = Explicit_Problem(lambda t,x:func(t,x)['f'](), [1.0,1.0,1.0],0)
+        sim = CVode(problem)
+        t,x = sim.simulate(250,len(self.time)-1)
+        dataframe = pandas.DataFrame(x,
+                columns=['population','burden','economy'],index=self.time)
+        return dataframe
+
+    def create_ds(self,*args):
+        f = self.create_dx(*args)
+        dx = np.empty((21,))
+        def func(t,x):
+            _f = f(t,x[:3])
+            dx[:3] = _f['f']()
+            _s = x[3:].reshape((3,6))
+            dx[3:] = (_f['fx']().dot(_s)+_f['fp']()).reshape((18,))
+            return dx
         return func
 
     def s_odeint(self,params):
-        x = self.x_odeint(params)
-        s0 = np.zeros(18)
-        func = self.create_ds(params,x)
-        res,info = odeint(lambda s,t:func(t,s),np.zeros(18), self.time,
+        func = self.create_ds(params)
+        s0 = np.ones(21)
+        s0[3:]=0
+        res,info = odeint(lambda s,t:func(t,s),s0, self.time,
                           full_output=True,printmessg=False,mxhnil=0)
         if info['message'] == "Integration successful.":
-            dataframe = pandas.DataFrame(res,columns=self.sensitivities)
-            dataframe['time'] = self.time
+            dataframe = pandas.DataFrame(res,columns=self.cols+self.sensitivities)
             return dataframe
 
     def s_cvode(self,params):
-        x = self.x_odeint(params)
-        s0 = np.zeros(18)
-        problem = Explicit_Problem(self.create_ds(params,x),s0,0)
+        func = self.create_ds(params)
+        s0 = np.ones(21)
+        s0[3:]=0
+        problem = Explicit_Problem(lambda t,s:func(t,s),s0,1900)
         sim = CVode(problem)
-        t,s = sim.simulate(250,1000)
-        dataframe = pandas.DataFrame(s,columns=self.sensitivities)
-        dataframe['time'] = t
+        t,s = sim.simulate(1900+250,self.time.shape[0]-1)
+        dataframe = pandas.DataFrame(
+            s,columns=self.cols+self.sensitivities,index=self.time)
         return dataframe
 
     def s_cvode_natural(self,params):
-        problem = Explicit_Problem(self.dx_with_parameters, [1.0,1.0,1.0],0,(
-            params['birthrate'],params['deathrate'],params['regenerationrate'],
-            params['burdenrate'],params['economyaim'],params['growthrate']))
+        problem = Explicit_Problem(lambda t,x,p:self.create_dx(p)(t,x)['f'](),
+                                   [1.0,1.0,1.0],0,
+                                   [params[p] for p in self.params_list])
         sim = CVode(problem)
         sim.report_continuously = True
         t,x = sim.simulate(250,self.time.shape[0]-1)
         dataframe = pandas.DataFrame(x,
                 columns=['population','burden','economy'])
-        dataframe['time'] = self.time
         d = {}
         sens = np.array(sim.p_sol)
         for i,col in enumerate(self.cols):
@@ -204,8 +203,7 @@ class WorldSimple(object):
                  'burdenrate','economyaim','growthrate')):
                 d['{0},{1}'.format(col,param)] = sens[j,:,i]
         dataframe_sens = pandas.DataFrame(d,index=self.time)
-        dataframe_sens['time'] = self.time
-        return dataframe,dataframe_sens
+        return dataframe_sens
 
     def s_ode(self,params):
         x0 = np.ones(3)
@@ -222,50 +220,227 @@ class WorldSimple(object):
         for column in self.cols:
             for param in self.params:
                 sensitivities.append('{0},{1}'.format(column,param))
-        sol = pandas.DataFrame(np.empty((t1/dt,22)),columns=self.cols+sensitivities+['time'])
+        sol = pandas.DataFrame(np.empty((t1/dt,22)),columns=self.cols+sensitivities)
         i = 0
         #return solver_x,solver_s
         while solver_x.successful() and solver_s.successful() and solver_x.t < t1:
             solver_x.integrate(solver_x.t+dt)
             sol.iloc[i][self.cols] = solver_x.y
-            sol.iloc[i]['time'] = solver_x.t
             solver_s.set_f_params(params,solver_x.y)
             solver_s.integrate(solver_s.t+dt)
             sol.iloc[i][sensitivities] = solver_s.y
             i += 1
         return sol
 
+    @property
+    def reference_data(self):
+        if not hasattr(self,'_reference_data'):
+            wc = WorldBankClient()
+            wc.load_from_hdf(resource_filename(__name__,'data/world_indicators.hdf'))
+            d = wc.indicators_by_countries('WLD')
+            self._reference_data = d.rename_axis(
+                {v:key for key,v in self.reference_data_names.items()})
+        return self._reference_data
+
+    def diff(self,result):
+        return result.loc[self.reference_data.index]/result.loc[1960]-\
+                self.reference_data/self.reference_data.loc[1960]
+
+    def create_residum_func(self):
+        initial = [self.initial[x] for x in self.params_list]
+        bnds = [(0,None) for i in range(len(self.params))]
+        def residum(p):
+            try:
+                result = self.x_odeint(p)
+                diff = self.diff(result)
+                return linalg.norm(diff)
+            except:
+                return 10e6
+        return residum,initial,bnds
+
+    def fit_with_data(self):
+        func,initial,bnds = self.create_residum_func()
+        r = optimize.minimize(func,initial,method='SLSQP',
+                              bounds=bnds,options={'maxiter':10e4,'ftol':10})
+        return r
+
+
+class WorldBankClient(object):
+    _REGION_CODES = 'http://worldbank.270a.info/classification/region.html'
+    BASE_URL = 'http://api.worldbank.org/'
+    _ID = re.compile(r'world_bank_data_(?P<country>[A-Z]*)_(?P<indicator>[A-Z.0-9]*).json')
+
+    def __init__(self):
+        self.indicators = {}
+        self._plots = {}
+
+    def indicators_by_countries(self,country):
+        indicators = self.indicators.keys()
+        d = {ind:v[country] for ind,v in self.indicators.items() if country in v}
+        return pandas.DataFrame(d)
+
+    @property
+    def all_countries(self):
+        if not hasattr(self,'_all_countries'):
+            self._all_countries = {x['name']:x['id'] for x in self.countries_basicinfo}
+        return self._all_countries
+
+    @property
+    def countries_basicinfo(self):
+        if not hasattr(self,'_countries_basicinfo'):
+            self._countries_basicinfo = self._get(
+                '{0}countries/all/'.format(self.BASE_URL))
+        return self._countries_basicinfo
+
+    @property
+    def indicators_basicinfo(self):
+        if not hasattr(self,'_indicators_basicinfo'):
+            self._indicators_basicinfo = self._get(
+                '{0}indicators/all/'.format(self.BASE_URL))
+        return self._indicators_basicinfo
+
+    @property
+    def all_indicators(self):
+        if not hasattr(self,'_all_indicators'):
+            self._all_indicators = {x['name']:x['id'] for x in self.indicators_basicinfo}
+        return self._all_indicators
+
+    def get_indicator_by_country(self,indicator,country):
+        if not indicator in self.indicators or not country in self.indicators[indicator]:
+            d = traversedata.WorldBankData(
+                self._get_indicator_by_country(indicator,country),
+                country=country,indicator=indicator)
+            if indicator in self.indicators:
+                self.indicators[indicator][country] = d.data
+            else:
+                self.indicators[indicator] = pandas.DataFrame(d.data,columns=[country])
+        return self.indicators[indicator][country]
+
+    def load_from_json_and_dir(self,path):
+        for filepath in glob.glob('{0}world_bank_data_*.json'.format(path)):
+            with open(filepath,'r') as f:
+                m = self._ID.match(f.name.split('/')[-1])
+                indicator = m.group('indicator')
+                country = m.group('country')
+                if not indicator in self.indicators or not country in self.indicators[indicator]:
+                    d = traversedata.WorldBankData(
+                        json.loads(f.read()))
+                    if indicator in self.indicators:
+                        self.indicators[indicator][country] = d
+                    else:
+                        self.indicators[indicator] = pandas.DataFrame(d.data,columns=[country])
+
+    def save_to_json(self,path):
+        with open(path,'w') as f:
+            f.write(json.dumps({ind:v.raw for ind,v in self.indicators.items()}))
+
+    def save_to_hdf(self,path,mode='a'):
+        store = pandas.HDFStore(path,mode=mode)
+        try:
+            for indicator,countries in self.indicators.items():
+                for country,d in countries.items():
+                    d.data.to_hdf(store,'{0}/{1}'.format(
+                        indicator.replace('.','_'),country))
+        finally:
+            store.close()
+
+    def load_from_hdf(self,path):
+        store = pandas.HDFStore(path,mode='r')
+        try:
+            for key in store.keys():
+                indicator,country= key.lstrip('/').split('/')
+                indicator = indicator.replace('_','.')
+                if indicator in self.indicators:
+                    self.indicators[indicator][country] = store[key]
+                else:
+                    self.indicators[indicator] = pandas.DataFrame(store[key],columns=[country])
+        finally:
+            store.close()
+
+
+    def _get_indicator_by_country(self,indicator,country):
+        return self._get('{0}countries/{1}/indicators/{2}'.format(
+            self.BASE_URL,country,indicator))
+
+    def _get(self,url,page=1,per_page=50,until=None):
+        result = []
+        def get(page):
+            r = requests.get(
+                '{0}?format=json&per_page={1}&page={2}'.format(url,per_page,page))
+            if r.ok:
+                status,res = r.json()
+                result.extend(res)
+                if page < status['pages'] and until and page < until:
+                    get(page+1)
+        get(1)
+        return result
+
+    def plot(self):
+        self._plots['main'] = DataFramePlot()
+        self._plots['main']
+
 class DataFramePlot(object):
-    def __init__(self,plotwidget):
+    def __init__(self,window_title='',size=(1000,600)):
         self.plots = {}
         self.colorwheel = ColorWheel(start=0.6)
-        self.plotwidget = plotwidget
-        self.legend = plotwidget.addLegend()
+        self.plotwidget = pg.PlotWidget()
+        self.plotwidget.addLegend()
+        self.plotwidget.setWindowTitle(window_title)
+        self.plotwidget.resize(*size)
+        self.plotwidget.show()
 
-    def addItem(self,dataframe,column):
-        self.plots[column] = self.plotwidget.plotItem.plot(
-            dataframe.index.values,dataframe[column].values,
-            pen=tuple(self.colorwheel.next().rgb),name=_(column)
-        )
+    def plot_single(self,x,y,name,label=None):
+        if not label:
+            label = name
+        if name in self.plots:
+            self.plots[name].setData({'x':x,'y':y},name=_(label))
+        else:
+            self.plots[name] = self.plotwidget.plotItem.plot({'x':x,'y':y},
+                pen=tuple(self.colorwheel.next().rgb),name=_(label)
+            )
 
-    def create_plots(self,dataframe):
+    def plot_all(self,dataframe,over=None):
+        if over:
+            index = dataframe[over]
+        else:
+            index = dataframe.index
         for column in dataframe:
-            if column != 'time':
-                self.addItem(dataframe,column)
+            if column != over:
+                self.plot_single(index,dataframe[column],column)
 
-    def update_plots(self,dataframe):
-        for column in dataframe:
-            if column != 'time':
-                if not column in self.plots:
-                    self.addItem(dataframe,column)
-                else:
-                    self.plots[column].setData(dataframe['time'],dataframe[column])
+class ScaledDataFrame(pandas.DataFrame):
+    def __init__(self,*args,**kwargs):
+        super(ScaledDataFrame,self).__init__(*args,**kwargs)
+        self._scale()
+
+    @property
+    def scales(self):
+        return self._scales
+
+    def _scale(self):
+        if not hasattr(self,'_scales'):
+            self._scales = {c:10**round(log(self[c].max(),10)) for c in self.columns}
+            for c in self.columns:
+                self[c]/=self._scales[c]
+
+    def plot(self,widget=None,over=None):
+        if not widget:
+            widget = DataFramePlot()
+        if over:
+            index = self[over]
+        else:
+            index = self.index.values.astype(np.float)
+        for column in self:
+            if column != over:
+                widget.plot_single(index,self[column],column,label='{0} * {1:.1e}'
+                                   .format(column,1.0/self.scales[column]))
+        return widget
 
 class Parameter(QtGui.QGroupBox):
     def __init__(self,name,value=1,xmin=0,xmax=10,step=1.0):
         super(Parameter,self).__init__(_(name))
         self.param_name = name
-        self.value = value
+        self._value = value
         layout = QtGui.QHBoxLayout()
         self.slider = QtGui.QSlider(QtCore.Qt.Horizontal, parent=self)
         neededsteps = (xmax-xmin)/step
@@ -290,17 +465,25 @@ class Parameter(QtGui.QGroupBox):
 
     valueChanged = QtCore.pyqtSignal(str,float)
 
+    @property
+    def value(self):
+        return self._value
+
+    @value.setter
+    def value(self,value):
+        if value != self._value:
+            self._value = value
+            self.textbox.setText(str(value))
+            self.slider.setValue((value-self.min)/self.step)
+            self.valueChanged.emit(self.param_name,value)
+
     def on_value_slider_changed(self,value):
         self.value = self.step*value+self.min
-        self.textbox.setText(str(self.value))
-        self.valueChanged.emit(self.param_name,self.value)
 
     def on_value_textbox_changed(self):
         value = str(self.textbox.text())
         if value:
             self.value = float(value)
-            self.slider.setValue((self.value-self.min)/self.step)
-            self.valueChanged.emit(self.param_name,self.value)
 
 class MatplotlibPlot(QtGui.QWidget):
     def __init__(self):
@@ -395,40 +578,31 @@ class MatplotlibPlot(QtGui.QWidget):
         vbox = self.layout()
         vbox.addLayout(hbox)
 
-
-class WorldSimpleGui(pg.PlotWidget):
+class WorldSimpleGui(QtGui.QMainWindow):
     """ segementation fault bug, see:
         https://groups.google.com/d/msg/pyqtgraph/juoqAiXABYY/BYpvCQeWSgMJ
     """
     def __init__(self):
         super(WorldSimpleGui,self).__init__()
+        # absolutly main
+        self.dataframeplots = {}
         self.world = WorldSimple(resolution=1000)
-        self.create_main_window()
-        self.create_fullscreen_shortcut()
-        self.create_parameter_widget()
-        self.create_main_controls_widget()
-        self.create_initial_plot()
-
-    def create_initial_plot(self):
         self.parameters = {param:value['initial']
                             for param,value in self.world.params.items()}
-        self.dataframeplot = DataFramePlot(self)
-        self.dataframeplot.create_plots(self.world.x_odeint(self.parameters))
-
-    def create_main_window(self):
-        self.win = QtGui.QMainWindow()
-        self.win.setCentralWidget(self)
-        self.win.setWindowTitle("Simple Limits of Growth World Model")
-        self.win.resize(1000,600)
+        self.dataframeplots['main'] = DataFramePlot()
+        self.dataframeplots['main'].plot_all(
+            self.world.x_odeint(self.parameters))
+        # set main window gui
+        self.setCentralWidget(self.dataframeplots['main'].plotwidget)
+        self.setWindowTitle("Simple Limits of Growth World Model")
+        self.resize(1000,600)
         self.tools = QtGui.QTabWidget()
         dock = QtGui.QDockWidget('Controllers')
         dock.setWidget(self.tools)
-        self.win.addDockWidget(QtCore.Qt.RightDockWidgetArea,dock)
-
-    def create_fullscreen_shortcut(self):
-        self.shcut_fullscreen = QtGui.QShortcut(self.win)
-        self.shcut_fullscreen.setKey("F11")
-        self.shcut_fullscreen.activated.connect(self.toogleFullscreen)
+        self.addDockWidget(QtCore.Qt.RightDockWidgetArea,dock)
+        # additional
+        self.create_parameter_widget()
+        self.create_main_controls_widget()
 
     def create_main_controls_widget(self):
         widget = QtGui.QWidget()
@@ -436,11 +610,18 @@ class WorldSimpleGui(pg.PlotWidget):
         layout = QtGui.QVBoxLayout()
         sens_button = QtGui.QPushButton('Sensitivity Analysis')
         sens_button.clicked.connect(self.plot_sensitivity)
+        sens_button_cvn = QtGui.QPushButton('Sensitivity Analysis Cvode Natural')
+        sens_button_cvn.clicked.connect(self.plot_sensitivity_cvode_natural)
+        default_button = QtGui.QPushButton('Reset Parameters')
+        default_button.clicked.connect(self.reset_parameters)
         layout.addWidget(sens_button)
+        layout.addWidget(sens_button_cvn)
+        layout.addWidget(default_button)
         widget.setLayout(layout)
         self.tools.addTab(widget,'Tasks')
 
     def create_parameter_widget(self):
+        self.sliders = {}
         widget = QtGui.QWidget()
         widget.resize(300,widget.height())
         layout = QtGui.QVBoxLayout()
@@ -449,27 +630,39 @@ class WorldSimpleGui(pg.PlotWidget):
                                xmin=value['min'],xmax=value['max'],step=0.01)
             slider.valueChanged.connect(self.change)
             layout.addWidget(slider)
+            self.sliders[param] = slider
         widget.setLayout(layout)
         self.tools.addTab(widget,'Parameters')
 
+    def reset_parameters(self):
+        for param,value in self.world.params.items():
+            self.sliders[param].value = value['initial']
+
     def plot_sensitivity(self):
-        x,s = self.world.s_cvode_natural(self.parameters)
-        data = s[['{0},economyaim'.format(x) for x in self.world.cols]]
-        self.p = MatplotlibPlot()
-        self.p.dataframe = data
-        self.p.on_draw()
-        self.p.show()
+        try:
+            s = self.world.s_odeint(self.parameters)
+            data = s[['{0},economyaim'.format(x) for x in self.world.cols]]
+            if not 'sensitivities' in self.dataframeplots:
+                self.dataframeplots['sensitivities'] = DataFramePlot(window_title='Sensitivity Analysis')
+            self.dataframeplots['sensitivities'].plot_all(data)
+            self.dataframeplots['sensitivities'].plotwidget.show()
+        except:
+            logger.warn('no solution for sensitivities found')
+    def plot_sensitivity_cvode_natural(self):
+        try:
+            s = self.world.s_cvode_natural(self.parameters)
+            data = s[['{0},economyaim'.format(x) for x in self.world.cols]]
+            if not 'sensitivities_cvode_natural' in self.dataframeplots:
+                self.dataframeplots['sensitivities_cvode_natural'] = DataFramePlot(window_title='Sensitivity Analysis Cvode Natural')
+            self.dataframeplots['sensitivities_cvode_natural'].plot_all(data)
+            self.dataframeplots['sensitivities_cvode_natural'].plotwidget.show()
+        except:
+            logger.warn('no solution for sensitivities found')
 
-    def toogleFullscreen(self):
-        if self.win.isFullScreen():
-            self.win.showNormal()
-        else:
-            self.win.showFullScreen()
-
-    def run(self):
-        self.win.show()
-        #self.parameter_widget.show()
-        qt_app.exec_()
+        #self.p = MatplotlibPlot()
+        #self.p.dataframe = data
+        #self.p.on_draw()
+        #self.p.show()
 
     def change(self,param, value):
         oldvalue = self.parameters[str(param)]
@@ -477,7 +670,7 @@ class WorldSimpleGui(pg.PlotWidget):
         t1 = time.time()
         res = self.world.x_odeint(self.parameters)
         if res:
-            self.dataframeplot.update_plots(res)
+            self.dataframeplots['main'].plot_all(res)
             logger.info('recalculated in {0}s'.format(time.time()-t1))
         else:
             logger.warn('failed with parameter "{0}" equal {1}'.format(param,value))
@@ -485,7 +678,8 @@ class WorldSimpleGui(pg.PlotWidget):
 
 def main():
     m = WorldSimpleGui()
-    m.run()
+    m.show()
+    qt_app.exec_()
 
 if __name__ == '__main__':
     main()

@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 
 from setuptools import setup
+from setuptools.extension import Extension
+from Cython.Distutils import build_ext
 
 setup(name='limitsofgrowth',
       entry_points = {
@@ -16,7 +18,15 @@ setup(name='limitsofgrowth',
       license='MIT',
       packages=['limitsofgrowth'],
       install_requires=['pyqtgraph'],
-      package_data={'limitsofgrowth':['data/locale/de/LC_MESSAGES/limitsofgrowth.mo','data/sensitivityanalysis.png']},
+      package_data={'limitsofgrowth':
+                    ['data/locale/de/LC_MESSAGES/limitsofgrowth.mo',
+                     'data/sensitivityanalysis.png',
+                     'data/world_indicators.hdf',
+                     ]},
+      ext_modules=[Extension('limitsofgrowth.traversedata',
+                             ['limitsofgrowth/traversedata.pyx'])
+                   ],
+      cmdclass={"build_ext": build_ext},
       zip_safe=False,
       classifiers=[
         'Development Status :: Alpha',
