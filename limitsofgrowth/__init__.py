@@ -172,7 +172,8 @@ class WorldSimple(object):
         res,info = odeint(lambda s,t:func(t,s),s0, self.time,
                           full_output=True,printmessg=False,mxhnil=0)
         if info['message'] == "Integration successful.":
-            dataframe = pandas.DataFrame(res,columns=self.cols+self.sensitivities)
+            dataframe = pandas.DataFrame(
+                res,columns=self.cols+self.sensitivities,index=self.time)
             return dataframe
 
     def s_cvode(self,params):
@@ -399,14 +400,15 @@ class DataFramePlot(object):
                 pen=tuple(self.colorwheel.next().rgb),name=_(label)
             )
 
-    def plot_all(self,dataframe,over=None):
+    def plot_all(self,dataframe,over=None,postfix='',prefix=''):
         if over:
             index = dataframe[over]
         else:
             index = dataframe.index
         for column in dataframe:
             if column != over:
-                self.plot_single(index,dataframe[column],column)
+                self.plot_single(
+                    index,dataframe[column],'%s%s%s'%(prefix,column,postfix))
 
 class ScaledDataFrame(pandas.DataFrame):
     def __init__(self,*args,**kwargs):
@@ -586,14 +588,15 @@ class WorldSimpleGui(QtGui.QMainWindow):
         super(WorldSimpleGui,self).__init__()
         # absolutly main
         self.dataframeplots = {}
+        self.data_tree = {}
         self.world = WorldSimple(resolution=1000)
         self.parameters = {param:value['initial']
                             for param,value in self.world.params.items()}
-        self.dataframeplots['main'] = DataFramePlot()
-        self.dataframeplots['main'].plot_all(
+        self.dataframeplots['Realtime Simulation'] = DataFramePlot()
+        self.dataframeplots['Realtime Simulation'].plot_all(
             self.world.x_odeint(self.parameters))
         # set main window gui
-        self.setCentralWidget(self.dataframeplots['main'].plotwidget)
+        self.setCentralWidget(self.dataframeplots['Realtime Simulation'].plotwidget)
         self.setWindowTitle("Simple Limits of Growth World Model")
         self.resize(1000,600)
         self.tools = QtGui.QTabWidget()
@@ -603,20 +606,72 @@ class WorldSimpleGui(QtGui.QMainWindow):
         # additional
         self.create_parameter_widget()
         self.create_main_controls_widget()
+        self.create_data_widget()
+        self._add_plot_to_data_widget('Realtime Simulation')
+
+    def _add_plot_to_data_widget(self,name):
+        plot = self.dataframeplots[name]
+        if not name in self.data_tree:
+            tree_item = pg.TreeWidgetItem()
+            tree_label = QtGui.QLabel(name)
+            tree_label.setContextMenuPolicy(QtCore.Qt.ActionsContextMenu)
+            tree_item.setWidget(0,tree_label)
+            tree_label.addAction(self.data_widget_show_action)
+            self.data_tree[name] = {'item':tree_item,'children':{}}
+            self.data_widget.addTopLevelItem(tree_item)
+        else:
+            tree_item = self.data_tree[name]['item']
+        for curve_name,curve in plot.plots.items():
+            if not curve_name in self.data_tree[name]['children']:
+                child = pg.TreeWidgetItem()
+                label = QtGui.QLabel(curve_name)
+                label.setContextMenuPolicy(QtCore.Qt.ActionsContextMenu)
+                label.addAction(self.data_widget_delete_action)
+                label.addAction(self.data_widget_move_action)
+                tree_item.addChild(child)
+                self.data_widget.setItemWidget(child,0,label)
+                self.data_tree[name]['children'][curve_name] = child
+
+    def create_data_widget(self):
+        self.data_widget = pg.TreeWidget()
+        self.data_widget.resize(300,self.data_widget.height())
+        self.data_widget.setColumnCount(1)
+        self.data_widget.setHeaderLabels(['plots'])
+        self.data_widget_delete_action = QtGui.QAction('delete',self.data_widget)
+        self.data_widget_move_action = QtGui.QWidgetAction(self.data_widget)
+        self.data_widget_plot_selector = QtGui.QComboBox()
+        #self.data_widget_plot_selector.currentIndexChanged.connect(self.move(str(self.data_widget_plot_selector.currentText())
+        for item in self.dataframeplots:
+            self.data_widget_plot_selector.addItem(item)
+        self.data_widget_move_action.setDefaultWidget(self.data_widget_plot_selector)
+        #self.data_widget_move_action.triggered.connect(lambda : self.plot_selector_widget.show())
+        self.data_widget_show_action = QtGui.QAction('show',self.data_widget)
+        self.tools.addTab(self.data_widget,'Data Explorer')
 
     def create_main_controls_widget(self):
         widget = QtGui.QWidget()
         widget.resize(300,widget.height())
         layout = QtGui.QVBoxLayout()
-        sens_button = QtGui.QPushButton('Sensitivity Analysis')
+        sens_group = QtGui.QGroupBox('Sensitivity Analysis')
+        sens_group_layout = QtGui.QVBoxLayout()
+        sens_button = QtGui.QPushButton('scipy.odeint simultaneous')
         sens_button.clicked.connect(self.plot_sensitivity)
-        sens_button_cvn = QtGui.QPushButton('Sensitivity Analysis Cvode Natural')
+        sens_button_cvn = QtGui.QPushButton('assimulo.cvode simultaneous')
         sens_button_cvn.clicked.connect(self.plot_sensitivity_cvode_natural)
+
+        sens_group_layout.addWidget(sens_button)
+        sens_group_layout.addWidget(sens_button_cvn)
+        sens_group.setLayout(sens_group_layout)
         default_button = QtGui.QPushButton('Reset Parameters')
         default_button.clicked.connect(self.reset_parameters)
-        layout.addWidget(sens_button)
-        layout.addWidget(sens_button_cvn)
+        # select the plot
+        self.plot_selector = QtGui.QComboBox(self)
+        self.plot_selector.setEditable(True)
+        for item in self.dataframeplots:
+            self.plot_selector.addItem(item)
+        layout.addWidget(self.plot_selector)
         layout.addWidget(default_button)
+        layout.addWidget(sens_group)
         widget.setLayout(layout)
         self.tools.addTab(widget,'Tasks')
 
@@ -638,31 +693,38 @@ class WorldSimpleGui(QtGui.QMainWindow):
         for param,value in self.world.params.items():
             self.sliders[param].value = value['initial']
 
+    def plot_dataframe(self,dataframe,postfix='',prefix=''):
+        selected_plot_name = str(self.plot_selector.currentText())
+        if not selected_plot_name in self.dataframeplots:
+            self.dataframeplots[selected_plot_name] = DataFramePlot(
+                window_title=selected_plot_name)
+            self.data_widget_plot_selector.addItem(selected_plot_name)
+        self.dataframeplots[selected_plot_name].plot_all(dataframe)
+        self.dataframeplots[selected_plot_name].plotwidget.show()
+        self._add_plot_to_data_widget(selected_plot_name)
+
     def plot_sensitivity(self):
         try:
             s = self.world.s_odeint(self.parameters)
             data = s[['{0},economyaim'.format(x) for x in self.world.cols]]
-            if not 'sensitivities' in self.dataframeplots:
-                self.dataframeplots['sensitivities'] = DataFramePlot(window_title='Sensitivity Analysis')
-            self.dataframeplots['sensitivities'].plot_all(data)
-            self.dataframeplots['sensitivities'].plotwidget.show()
+            self.plot_dataframe(data)
         except:
             logger.warn('no solution for sensitivities found')
+
     def plot_sensitivity_cvode_natural(self):
         try:
             s = self.world.s_cvode_natural(self.parameters)
             data = s[['{0},economyaim'.format(x) for x in self.world.cols]]
-            if not 'sensitivities_cvode_natural' in self.dataframeplots:
-                self.dataframeplots['sensitivities_cvode_natural'] = DataFramePlot(window_title='Sensitivity Analysis Cvode Natural')
-            self.dataframeplots['sensitivities_cvode_natural'].plot_all(data)
-            self.dataframeplots['sensitivities_cvode_natural'].plotwidget.show()
+            self.plot_dataframe(data)
         except:
             logger.warn('no solution for sensitivities found')
 
-        #self.p = MatplotlibPlot()
-        #self.p.dataframe = data
-        #self.p.on_draw()
-        #self.p.show()
+    def matplotlib_plot(self):
+        # not in use currently
+        self.p = MatplotlibPlot()
+        self.p.dataframe = data
+        self.p.on_draw()
+        self.p.show()
 
     def change(self,param, value):
         oldvalue = self.parameters[str(param)]
