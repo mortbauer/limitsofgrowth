@@ -56,12 +56,12 @@ qt_app = QtGui.QApplication(sys.argv)
 
 
 class WorldSimple(object):
-    params = {'birthrate':{'initial':0.03,'max':1,'min':0},
-              'deathrate':{'initial':0.01,'max':1,'min':0},
-              'regenerationrate':{'initial':0.1,'max':1,'min':0},
-              'burdenrate':{'initial':0.02,'max':1,'min':0},
-              'economyaim':{'initial':10,'max':100,'min':0},
-              'growthrate':{'initial':0.05,'max':1,'min':0}}
+    params = {'birthrate':{'initial':0.03,'max':10,'min':0.01},
+              'deathrate':{'initial':0.01,'max':10,'min':0.01},
+              'regenerationrate':{'initial':0.1,'max':10,'min':0.01},
+              'burdenrate':{'initial':0.02,'max':10,'min':0.01},
+              'economyaim':{'initial':10,'max':100,'min':0.1},
+              'growthrate':{'initial':0.05,'max':10,'min':0.01}}
 
     params_list = ['birthrate','deathrate','regenerationrate',
                             'burdenrate','economyaim','growthrate']
@@ -238,7 +238,8 @@ class WorldSimple(object):
         if not hasattr(self,'_reference_data'):
             wc = WorldBankClient()
             wc.load_from_hdf(resource_filename(__name__,'data/world_indicators.hdf'))
-            d = wc.indicators_by_countries('WLD')
+            d = wc.indicators_by_countries('HIC')
+            d.index = d.index.astype(np.int)
             self._reference_data = d.rename_axis(
                 {v:key for key,v in self.reference_data_names.items()})
         return self._reference_data
@@ -247,22 +248,31 @@ class WorldSimple(object):
         return result.loc[self.reference_data.index]/result.loc[1960]-\
                 self.reference_data/self.reference_data.loc[1960]
 
-    def create_residum_func(self):
+    def create_residum_func(self,weights={'economy':10,'population':1,'burden':1}):
         initial = [self.initial[x] for x in self.params_list]
-        bnds = [(0,None) for i in range(len(self.params))]
+        bnds = [(self.params[p]['min'],self.params[p]['max']) for p in self.params_list]
+        n = self.reference_data.shape[0]
+        d = np.empty(n*3)
         def residum(p):
             try:
                 result = self.x_odeint(p)
                 diff = self.diff(result)
-                return linalg.norm(diff)
+                for i,c in enumerate(diff):
+                    d[i*n:i*n+n] = (diff[c]*weights[c])**2
             except:
-                return 10e6
+                d[:] += 10e6
+                logger.warn('failed to calc diff with p = {0}'.format(p))
+            return d
         return residum,initial,bnds
 
-    def fit_with_data(self):
+    def fit_with_data_bfgs(self):
         func,initial,bnds = self.create_residum_func()
-        r = optimize.minimize(func,initial,method='SLSQP',
-                              bounds=bnds,options={'maxiter':10e4,'ftol':10})
+        r = optimize.fmin_l_bfgs_b(lambda *args:linalg.norm(func(*args)),initial, bounds=bnds,approx_grad=True)
+        return r
+
+    def fit_with_data_leastsq(self):
+        func,initial,bnds = self.create_residum_func()
+        r = optimize.leastsq(func,initial,full_output=True)
         return r
 
 
@@ -339,9 +349,8 @@ class WorldBankClient(object):
         store = pandas.HDFStore(path,mode=mode)
         try:
             for indicator,countries in self.indicators.items():
-                for country,d in countries.items():
-                    d.data.to_hdf(store,'{0}/{1}'.format(
-                        indicator.replace('.','_'),country))
+                countries.to_hdf(store,'{0}'.format(
+                    indicator.replace('.','_')))
         finally:
             store.close()
 
@@ -349,15 +358,11 @@ class WorldBankClient(object):
         store = pandas.HDFStore(path,mode='r')
         try:
             for key in store.keys():
-                indicator,country= key.lstrip('/').split('/')
+                indicator = key.lstrip('/')
                 indicator = indicator.replace('_','.')
-                if indicator in self.indicators:
-                    self.indicators[indicator][country] = store[key]
-                else:
-                    self.indicators[indicator] = pandas.DataFrame(store[key],columns=[country])
+                self.indicators[indicator] = store[key]
         finally:
             store.close()
-
 
     def _get_indicator_by_country(self,indicator,country):
         return self._get('{0}countries/{1}/indicators/{2}'.format(
@@ -411,7 +416,7 @@ class DataFramePlot(object):
                     index,dataframe[column],'%s%s%s'%(prefix,column,postfix))
 
 class ScaledDataFrame(pandas.DataFrame):
-    def __init__(self,*args,**kwargs):
+    def __init__(self,*args ,**kwargs):
         super(ScaledDataFrame,self).__init__(*args,**kwargs)
         self._scale()
 
@@ -423,7 +428,7 @@ class ScaledDataFrame(pandas.DataFrame):
         if not hasattr(self,'_scales'):
             self._scales = {c:10**round(log(self[c].max(),10)) for c in self.columns}
             for c in self.columns:
-                self[c]/=self._scales[c]
+                self[c] = self[c]/self._scales[c]
 
     def plot(self,widget=None,over=None):
         if not widget:
@@ -598,6 +603,7 @@ class WorldSimpleGui(QtGui.QMainWindow):
         # set main window gui
         self.setCentralWidget(self.dataframeplots['Realtime Simulation'].plotwidget)
         self.setWindowTitle("Simple Limits of Growth World Model")
+        self.mainplot = self.dataframeplots['Realtime Simulation']
         self.resize(1000,600)
         self.tools = QtGui.QTabWidget()
         dock = QtGui.QDockWidget('Controllers')
@@ -634,7 +640,7 @@ class WorldSimpleGui(QtGui.QMainWindow):
 
     def create_data_widget(self):
         self.data_widget = pg.TreeWidget()
-        self.data_widget.resize(300,self.data_widget.height())
+        self.data_widget.resize(400,self.data_widget.height())
         self.data_widget.setColumnCount(1)
         self.data_widget.setHeaderLabels(['plots'])
         self.data_widget_delete_action = QtGui.QAction('delete',self.data_widget)
@@ -648,44 +654,68 @@ class WorldSimpleGui(QtGui.QMainWindow):
         self.data_widget_show_action = QtGui.QAction('show',self.data_widget)
         self.tools.addTab(self.data_widget,'Data Explorer')
 
+    def create_real_data_tree_widget(self):
+        self.real_dw = pg.DataTreeWidget(data={'optimization':self.optimized})
+
     def create_main_controls_widget(self):
         widget = QtGui.QWidget()
-        widget.resize(300,widget.height())
+        widget.resize(400,widget.height())
         layout = QtGui.QVBoxLayout()
         sens_group = QtGui.QGroupBox('Sensitivity Analysis')
         sens_group_layout = QtGui.QVBoxLayout()
         sens_button = QtGui.QPushButton('scipy.odeint simultaneous')
         sens_button.clicked.connect(self.plot_sensitivity)
-        sens_button_cvn = QtGui.QPushButton('assimulo.cvode simultaneous')
+        sens_button_cv = QtGui.QPushButton('assimulo.cvode simultaneous')
+        sens_button_cv.clicked.connect(self.plot_sensitivity_cvode)
+        sens_button_cvn = QtGui.QPushButton('assimulo.cvode natural')
         sens_button_cvn.clicked.connect(self.plot_sensitivity_cvode_natural)
-
+        ref_group = QtGui.QGroupBox('Reference Data')
+        ref_layout = QtGui.QVBoxLayout()
+        ref_button = QtGui.QPushButton('world indicators worldbank')
+        ref_button.clicked.connect(lambda : self.plot_dataframe(
+            self.world.reference_data/self.world.reference_data.loc[1960],
+            postfix=' ref'))
+        ref_layout.addWidget(ref_button)
+        opt_button = QtGui.QPushButton('plot optimized')
+        opt_button.clicked.connect(self.plot_optimized)
+        ref_layout.addWidget(opt_button)
+        diff_button = QtGui.QPushButton('plot difference')
+        diff_button.clicked.connect(self.plot_diff)
+        ref_layout.addWidget(diff_button)
         sens_group_layout.addWidget(sens_button)
+        sens_group_layout.addWidget(sens_button_cv)
         sens_group_layout.addWidget(sens_button_cvn)
         sens_group.setLayout(sens_group_layout)
-        default_button = QtGui.QPushButton('Reset Parameters')
-        default_button.clicked.connect(self.reset_parameters)
+        ref_group.setLayout(ref_layout)
         # select the plot
         self.plot_selector = QtGui.QComboBox(self)
         self.plot_selector.setEditable(True)
         for item in self.dataframeplots:
             self.plot_selector.addItem(item)
         layout.addWidget(self.plot_selector)
-        layout.addWidget(default_button)
         layout.addWidget(sens_group)
+        layout.addWidget(ref_group)
         widget.setLayout(layout)
-        self.tools.addTab(widget,'Tasks')
+        self.tools.addTab(widget,'Plot Creation')
 
     def create_parameter_widget(self):
         self.sliders = {}
         widget = QtGui.QWidget()
-        widget.resize(300,widget.height())
+        widget.resize(400,widget.height())
         layout = QtGui.QVBoxLayout()
-        for param,value in self.world.params.items():
+        for param in self.world.params_list:
+            value = self.world.params[param]
             slider = Parameter(param,value=value['initial'],
                                xmin=value['min'],xmax=value['max'],step=0.01)
             slider.valueChanged.connect(self.change)
             layout.addWidget(slider)
             self.sliders[param] = slider
+        default_button = QtGui.QPushButton('Reset Parameters')
+        default_button.clicked.connect(self.reset_parameters)
+        layout.addWidget(default_button)
+        optimized_button = QtGui.QPushButton('Set to Optimized')
+        optimized_button.clicked.connect(self.set_optimized)
+        layout.addWidget(optimized_button)
         widget.setLayout(layout)
         self.tools.addTab(widget,'Parameters')
 
@@ -693,13 +723,33 @@ class WorldSimpleGui(QtGui.QMainWindow):
         for param,value in self.world.params.items():
             self.sliders[param].value = value['initial']
 
+    @property
+    def optimized(self):
+        if not hasattr(self,'_optimized'):
+            QtGui.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
+            self._optimized = self.world.fit_with_data_bfgs()
+            QtGui.QApplication.restoreOverrideCursor()
+        return self._optimized
+
+    def plot_diff(self):
+        self.plot_dataframe(self.world.diff(self.world.x_odeint(self.optimized[0])),postfix=' diff')
+
+    def plot_optimized(self):
+        x = self.world.x_odeint(self.optimized[0])
+        x = x/x.loc[1960]
+        self.plot_dataframe(x.loc[self.world.reference_data.index],postfix=' optimized')
+
+    def set_optimized(self):
+        for i,param in enumerate(self.world.params_list):
+            self.sliders[param].value = self.optimized[0][i]
+
     def plot_dataframe(self,dataframe,postfix='',prefix=''):
         selected_plot_name = str(self.plot_selector.currentText())
         if not selected_plot_name in self.dataframeplots:
             self.dataframeplots[selected_plot_name] = DataFramePlot(
                 window_title=selected_plot_name)
             self.data_widget_plot_selector.addItem(selected_plot_name)
-        self.dataframeplots[selected_plot_name].plot_all(dataframe)
+        self.dataframeplots[selected_plot_name].plot_all(dataframe,postfix=postfix,prefix=prefix)
         self.dataframeplots[selected_plot_name].plotwidget.show()
         self._add_plot_to_data_widget(selected_plot_name)
 
@@ -707,7 +757,7 @@ class WorldSimpleGui(QtGui.QMainWindow):
         try:
             s = self.world.s_odeint(self.parameters)
             data = s[['{0},economyaim'.format(x) for x in self.world.cols]]
-            self.plot_dataframe(data)
+            self.plot_dataframe(data,postfix=' odeint')
         except:
             logger.warn('no solution for sensitivities found')
 
@@ -715,7 +765,15 @@ class WorldSimpleGui(QtGui.QMainWindow):
         try:
             s = self.world.s_cvode_natural(self.parameters)
             data = s[['{0},economyaim'.format(x) for x in self.world.cols]]
-            self.plot_dataframe(data)
+            self.plot_dataframe(data,postfix=' cvode natural')
+        except:
+            logger.warn('no solution for sensitivities found')
+
+    def plot_sensitivity_cvode(self):
+        try:
+            s = self.world.s_cvode(self.parameters)
+            data = s[['{0},economyaim'.format(x) for x in self.world.cols]]
+            self.plot_dataframe(data,postfix=' cvode')
         except:
             logger.warn('no solution for sensitivities found')
 
@@ -732,7 +790,7 @@ class WorldSimpleGui(QtGui.QMainWindow):
         t1 = time.time()
         res = self.world.x_odeint(self.parameters)
         if res:
-            self.dataframeplots['main'].plot_all(res)
+            self.mainplot.plot_all(res)
             logger.info('recalculated in {0}s'.format(time.time()-t1))
         else:
             logger.warn('failed with parameter "{0}" equal {1}'.format(param,value))
@@ -742,6 +800,35 @@ def main():
     m = WorldSimpleGui()
     m.show()
     qt_app.exec_()
+
+
+def get_reference_data():
+    # no data available
+    water_pollution = ['EE.BOD.%s.ZS'% sector for sector in
+                       ('CGLS','FOOD','MTAL','OTHR','PAPR','TXTL','WOOD')]
+
+    indicators = {'population':'SP.POP.TOTL',
+                  'economy':'NY.GDP.MKTP.CD',
+                  'burden':'EN.ATM.CO2E.KT'}
+
+    countries = {'world':'WLD',
+                 'high income':'HIC',
+                 'low income':'LIC',
+                 'low & middle income':'LMY',
+                 'high middel income':'HIC',
+                 'low middle income':'LMC'}
+
+    wc = WorldBankClient()
+
+    for country in countries.values():
+        for indicator in indicators:
+            if type(indicators[indicator]) == list:
+                for ind in indicators[indicator]:
+                    wc.get_indicator_by_country(ind,country)
+            else:
+                wc.get_indicator_by_country(indicators[indicator],country)
+    return wc
+
 
 if __name__ == '__main__':
     main()
