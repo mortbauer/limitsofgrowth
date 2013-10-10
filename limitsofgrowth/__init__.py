@@ -615,14 +615,19 @@ class WorldSimpleGui(QtGui.QMainWindow):
         self.create_data_widget()
         self._add_plot_to_data_widget('Realtime Simulation')
 
+    def _remove_plot_to_data_widget(self,name):
+        self.data_widget.removeTopLevelItem(self.data_tree.pop(name)['item'])
+
     def _add_plot_to_data_widget(self,name):
+        def make_callback(plot,curve):
+            return lambda q_point: self.data_tree_context_menu(q_point,plot,curve)
         plot = self.dataframeplots[name]
         if not name in self.data_tree:
             tree_item = pg.TreeWidgetItem()
             tree_label = QtGui.QLabel(name)
-            tree_label.setContextMenuPolicy(QtCore.Qt.ActionsContextMenu)
+            tree_label.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+            tree_label.customContextMenuRequested.connect(make_callback(name,None))
             tree_item.setWidget(0,tree_label)
-            tree_label.addAction(self.data_widget_show_action)
             self.data_tree[name] = {'item':tree_item,'children':{}}
             self.data_widget.addTopLevelItem(tree_item)
         else:
@@ -631,27 +636,53 @@ class WorldSimpleGui(QtGui.QMainWindow):
             if not curve_name in self.data_tree[name]['children']:
                 child = pg.TreeWidgetItem()
                 label = QtGui.QLabel(curve_name)
-                label.setContextMenuPolicy(QtCore.Qt.ActionsContextMenu)
-                label.addAction(self.data_widget_delete_action)
-                label.addAction(self.data_widget_move_action)
+                label.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+                label.customContextMenuRequested.connect(make_callback(name,curve_name))
                 tree_item.addChild(child)
                 self.data_widget.setItemWidget(child,0,label)
                 self.data_tree[name]['children'][curve_name] = child
+
+    def data_tree_context_menu(self,q_point,plotname,curve):
+        menu = QtGui.QMenu(self)
+        delete_action = menu.addAction('clear')
+        plot = self.dataframeplots[plotname]
+        legend = plot.plotwidget.plotItem.legend
+        def clear():
+            if not curve:
+                plot.plotwidget.clear()
+                # https://groups.google.com/d/msg/pyqtgraph/UTwLwC5mQnQ/HxGgXc0xzbMJ
+                legend.items = []
+                legend.updateSize()
+                plot.plots = {}
+                self._remove_plot_to_data_widget(plotname)
+            else:
+                plot.plotwidget.removeItem(plot.plots.pop(curve))
+                legend.items = [x for x in legend.items if not x[1].text == curve]
+                legend.updateSize()
+                self.data_tree[plotname]['item'].removeChild(self.data_tree[plotname]['children'].pop(curve))
+
+        delete_action.triggered.connect(clear)
+        move_action = QtGui.QWidgetAction(menu)
+        move = QtGui.QWidget()
+        move_button = QtGui.QPushButton('move to')
+        layout = QtGui.QHBoxLayout()
+        plot_selector = QtGui.QComboBox()
+        plot_selector.setEditable(True)
+        for item in self.dataframeplots:
+            plot_selector.addItem(item)
+        layout.addWidget(move_button)
+        layout.addWidget(plot_selector)
+        move.setLayout(layout)
+        move_action.setDefaultWidget(move)
+        menu.addAction(move_action)
+        menu.exec_(self.data_widget.mapToGlobal(q_point))
+
 
     def create_data_widget(self):
         self.data_widget = pg.TreeWidget()
         self.data_widget.resize(400,self.data_widget.height())
         self.data_widget.setColumnCount(1)
         self.data_widget.setHeaderLabels(['plots'])
-        self.data_widget_delete_action = QtGui.QAction('delete',self.data_widget)
-        self.data_widget_move_action = QtGui.QWidgetAction(self.data_widget)
-        self.data_widget_plot_selector = QtGui.QComboBox()
-        #self.data_widget_plot_selector.currentIndexChanged.connect(self.move(str(self.data_widget_plot_selector.currentText())
-        for item in self.dataframeplots:
-            self.data_widget_plot_selector.addItem(item)
-        self.data_widget_move_action.setDefaultWidget(self.data_widget_plot_selector)
-        #self.data_widget_move_action.triggered.connect(lambda : self.plot_selector_widget.show())
-        self.data_widget_show_action = QtGui.QAction('show',self.data_widget)
         self.tools.addTab(self.data_widget,'Data Explorer')
 
     def create_real_data_tree_widget(self):
@@ -748,7 +779,7 @@ class WorldSimpleGui(QtGui.QMainWindow):
         if not selected_plot_name in self.dataframeplots:
             self.dataframeplots[selected_plot_name] = DataFramePlot(
                 window_title=selected_plot_name)
-            self.data_widget_plot_selector.addItem(selected_plot_name)
+            self.dataframeplots[selected_plot_name].plotwidget.closeEvent = lambda event:self._remove_plot_to_data_widget(selected_plot_name)
         self.dataframeplots[selected_plot_name].plot_all(dataframe,postfix=postfix,prefix=prefix)
         self.dataframeplots[selected_plot_name].plotwidget.show()
         self._add_plot_to_data_widget(selected_plot_name)
@@ -790,7 +821,7 @@ class WorldSimpleGui(QtGui.QMainWindow):
         t1 = time.time()
         res = self.world.x_odeint(self.parameters)
         if res:
-            self.mainplot.plot_all(res)
+            self.plot_dataframe(res)
             logger.info('recalculated in {0}s'.format(time.time()-t1))
         else:
             logger.warn('failed with parameter "{0}" equal {1}'.format(param,value))
