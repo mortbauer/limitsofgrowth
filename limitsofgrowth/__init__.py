@@ -265,16 +265,38 @@ class WorldSimple(object):
             return d
         return residum,initial,bnds
 
+
+    def fit_with_data_basinhopping(self):
+        func,initial,bnds = self.create_residum_func()
+        _min = np.array([bnd[0] for bnd in bnds])
+        _max = np.array([bnd[1] for bnd in bnds])
+
+        def accept_test(**kwargs):
+            x = kwargs['x_new']
+            res =  bool(np.all(x<=_max)) and bool(np.all(x>=_min))
+            return res
+
+        minimizer_kwargs = {"method":"L-BFGS-B", "jac":False,'bounds':bnds}
+        r = optimize.basinhopping(
+            lambda *args:linalg.norm(func(*args)),
+            initial,accept_test=accept_test,
+            niter=100,minimizer_kwargs=minimizer_kwargs
+        )
+
+        return r
+
     def fit_with_data_bfgs(self):
         func,initial,bnds = self.create_residum_func()
-        r = optimize.fmin_l_bfgs_b(lambda *args:linalg.norm(func(*args)),initial, bounds=bnds,approx_grad=True)
+        r = optimize.fmin_l_bfgs_b(
+            lambda *args:linalg.norm(func(*args)),initial,
+            bounds=bnds,approx_grad=True
+        )
         return r
 
     def fit_with_data_leastsq(self):
         func,initial,bnds = self.create_residum_func()
         r = optimize.leastsq(func,initial,full_output=True)
         return r
-
 
 class WorldBankClient(object):
     _REGION_CODES = 'http://worldbank.270a.info/classification/region.html'
@@ -831,7 +853,6 @@ def main():
     m = WorldSimpleGui()
     m.show()
     qt_app.exec_()
-
 
 def get_reference_data():
     # no data available
