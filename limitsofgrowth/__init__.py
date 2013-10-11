@@ -636,6 +636,8 @@ class WorldSimpleGui(QtGui.QMainWindow):
         self.create_main_controls_widget()
         self.create_data_widget()
         self._add_plot_to_data_widget('Realtime Simulation')
+        self.opt_basinhopping = [  1.00227541e-02,   9.36331825e+00,   1.00000000e+01,
+         2.23513971e-02,   9.93493979e+01,   5.95912808e-01]
 
     def _remove_plot_to_data_widget(self,name):
         self.data_widget.removeTopLevelItem(self.data_tree.pop(name)['item'])
@@ -780,7 +782,7 @@ class WorldSimpleGui(QtGui.QMainWindow):
     def optimized(self):
         if not hasattr(self,'_optimized'):
             QtGui.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
-            self._optimized = self.world.fit_with_data_bfgs()
+            self._optimized = (self.opt_basinhopping,)#self.world.fit_with_data_bfgs()
             QtGui.QApplication.restoreOverrideCursor()
         return self._optimized
 
