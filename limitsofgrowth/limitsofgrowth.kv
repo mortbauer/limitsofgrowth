@@ -1,0 +1,60 @@
+#:kivy 1.1.0
+
+FloatLayout:
+    orientation: 'vertical'
+    Controller:
+        y: root.height - 50
+        name: 'economyaim'
+        on_value: plot.plot()
+    Controller:
+        y: root.height - 100
+        name: 'burdenrate'
+        max: 3
+    Plot:
+        id: plot
+        y: root.y
+        height: root.height - 200
+        size_hint: 1,None
+        padding: 20
+        xlabel: 'X'
+        ylabel: 'Y'
+        x_ticks_major: 25
+        y_ticks_major: 1
+        y_grid_label: True
+        x_grid_label: True
+
+<Controller>:
+    height: 50
+    width: root.width
+    text: _text
+    slider: _slider
+    min: 0
+    max: 10
+    value: 1
+    Label:
+        id: label
+        height: 20
+        width: 100
+        x: root.x + 20
+        y: root.y + 30
+        text: root.name
+    Slider:
+        id: _slider
+        height: 20
+        width: root.width - 100
+        max: root.max
+        min: root.min
+        x: root.x + 100
+        y: root.y
+        value: root.value
+        on_value: root._update_value(self.value)
+    TextInput:
+        id: _text
+        font_size: '10dp'
+        height: self.line_height*2.2
+        width: 70
+        x: root.x + 10
+        y: root.y
+        text: str(root.value)
+        multiline: False
+        on_text_validate: root._update_value(self.text)
