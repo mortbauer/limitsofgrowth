@@ -3,40 +3,87 @@
 FloatLayout:
     orientation: 'vertical'
     Controller:
-        y: root.height - 50
-        name: 'economyaim'
-        on_value: plot.plot()
+        id: birthrate
+        y: root.height - 40
+        name: 'birthrate'
+        value: 0.03
+        on_value: plot.refresh()
     Controller:
-        y: root.height - 100
+        id: deathrate
+        y: birthrate.y - 40
+        value:0.02
+        name: 'deathrate'
+        on_value: plot.refresh()
+    Controller:
+        id: regenerationrate
+        y: deathrate.y - 40
+        value:0.1
+        name: 'regenerationrate'
+        on_value: plot.refresh()
+    Controller:
+        id: burdenrate
+        y: regenerationrate.y - 40
+        value:0.02
         name: 'burdenrate'
         max: 3
+        on_value: plot.refresh()
+    Controller:
+        id: economyaim
+        y: burdenrate.y - 40
+        value:10.0
+        name: 'economyaim'
+        on_value: plot.refresh()
+    Controller:
+        id: growthrate
+        y: economyaim.y - 40
+        value:0.05
+        name: 'burdenrate'
+        max: 3
+        on_value: plot.refresh()
+    WorldModel:
+        id: halllo
+        birthrate:birthrate.value
+        deathrate:deathrate.value
+        regenerationrate:regenerationrate.value
+        burdenrate:burdenrate.value
+        economyaim:economyaim.value
+        growthrate:growthrate.value
     Plot:
         id: plot
+        world: halllo
         y: root.y
-        height: root.height - 200
+        height: growthrate.y - 50
         size_hint: 1,None
         padding: 20
         xlabel: 'X'
         ylabel: 'Y'
         x_ticks_major: 25
-        y_ticks_major: 1
         y_grid_label: True
         x_grid_label: True
+    Legend:
+        id:l
+        pos: plot.x + 50 ,plot.y +100
+
+<Legend>:
+    canvas:
+        Color:
+            rgb: 23.755571178771895, 0.0, 204.0
+        Line:
+            rectangle: root.x,root.y,200,60
 
 <Controller>:
-    height: 50
+    height: _text.height + _label.height
     width: root.width
     text: _text
     slider: _slider
-    min: 0
-    max: 10
-    value: 1
+    min: 0.0
+    max: 10.0
     Label:
-        id: label
-        height: 20
+        id: _label
+        height: 15
         width: 100
-        x: root.x + 20
-        y: root.y + 30
+        x: root.x + self.height
+        y: _text.y + _text.height
         text: root.name
     Slider:
         id: _slider
@@ -51,10 +98,11 @@ FloatLayout:
     TextInput:
         id: _text
         font_size: '10dp'
-        height: self.line_height*2.2
+        height: self.line_height*1.6
         width: 70
         x: root.x + 10
         y: root.y
+        padding_y: 4
         text: str(root.value)
         multiline: False
         on_text_validate: root._update_value(self.text)
