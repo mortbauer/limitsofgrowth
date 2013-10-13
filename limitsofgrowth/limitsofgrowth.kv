@@ -60,6 +60,14 @@
         halign: 'right'
         color: 1,0,0,1
 
+<TabbedPlot>:
+    Plot:
+        id: plot
+        xlabel:'X'
+        ylabel:'Y'
+        x_ticks_major:25
+        x_grid_label: True
+
 
 FloatLayout:
     ActionBar:
@@ -72,17 +80,25 @@ FloatLayout:
             ActionToggleButton:
                 text: 'Controllers'
                 on_release: app.toggle_controllers()
+            ActionButton:
+                text: 'New Plot'
+                on_release: app.new_plot()
 
-    Plot:
-        id: plot
+    TabbedPanel:
+        id: tabbedpanel
         y: controllers.y + controllers.height
         height: actionbar.y - self.y
         size_hint: 1,None
-        xlabel:'X'
-        ylabel:'Y'
-        x_ticks_major:25
-        x_grid_label: True
-        y_grid_label: True
+        do_default_tab: False
+        TabbedPanelItem:
+            text: 'Simulation'
+            Plot:
+                id: plot
+                xlabel:'X'
+                ylabel:'Y'
+                x_ticks_major:25
+                x_grid_label: True
+                y_grid_label: True
 
     Widget:
         RelativeLayout:
