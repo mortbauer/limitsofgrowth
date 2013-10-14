@@ -165,5 +165,7 @@ class LimitsOfGrowthApp(App):
         self.root.ids.plot.plot_dataframe(self.world.x_odeint(self.parameters))
 
 
-if __name__ == '__main__':
+def main():
     LimitsOfGrowthApp().run()
+if __name__ == '__main__':
+    main()

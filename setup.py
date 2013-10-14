@@ -6,8 +6,9 @@ from Cython.Distutils import build_ext
 
 setup(name='limitsofgrowth',
       entry_points = {
-          'console_scripts' :
-              ['limitsofgrowth = limitsofgrowth:main',
+          'console_scripts' :[
+              'limitsofgrowth-qt = limitsofgrowth.qt_gui:main',
+              'limitsofgrowth-kivy = limitsofgrowth.kivy_gui:main',
                ]},
       version='0.0.0',
       description='A simple World Model, after J.W. Forrester',
