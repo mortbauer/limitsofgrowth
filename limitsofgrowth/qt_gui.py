@@ -1,18 +1,14 @@
 #coding=utf8
 # virtualenv test_py2
-import os
 import sys
 import time
 
-import pandas
-import numpy as np
 from colors import ColorWheel
 from pyqtgraph.Qt import QtGui, QtCore
 import pyqtgraph as pg
 
 import logging
 import gettext
-import locale
 from pkg_resources import resource_filename
 
 from limitsofgrowth.model import WorldSimple
