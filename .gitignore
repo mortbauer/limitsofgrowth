@@ -1,2 +1,7 @@
+build/*
+*.log
+*egg-info/*
+*.so
+*.c
 venv
 *.pyc
