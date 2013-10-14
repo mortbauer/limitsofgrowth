@@ -39,22 +39,16 @@ class WorldSimple(object) :
             for param in self.params:
                 self.sensitivities.append('{0},{1}'.format(column,param))
 
-    def create_dx(self,*args):
-        params = args[0]
-        if isinstance(params,dict):
-            birthrate = params['birthrate']
-            deathrate = params['deathrate']
-            regenerationrate = params['regenerationrate']
-            burdenrate = params['burdenrate']
-            economyaim = params['economyaim']
-            growthrate = params['growthrate']
-        elif len(params) == 6:
-            birthrate = params[0]
-            deathrate = params[1]
-            regenerationrate = params[2]
-            burdenrate = params[3]
-            economyaim = params[4]
-            growthrate = params[5]
+
+    def create_input_vector(self,params):
+        return [params[param] for param in self.params]
+
+    def create_dx(self,p):
+        """ parameter vector p must be in correct order, to ensure this you can
+        construct it throught the function create_input_vector which takes a
+        dictionary as input
+        """
+        birthrate,deathrate,regenerationrate,burdenrate,economyaim,growthrate=p
         def func(time,x):
             """
             the change of the system variables population, burden and economy
@@ -95,7 +89,7 @@ class WorldSimple(object) :
         return func
 
     def x_odeint(self,params):
-        func = self.create_dx(params)
+        func = self.create_dx(self.create_input_vector(params))
         res,info = odeint(lambda x,t:func(t,x)['f'](),[1.0,1.0,1.0], self.time,
                           full_output=True,printmessg=False,mxhnil=0)
         if info['message'] == "Integration successful.":
@@ -106,7 +100,7 @@ class WorldSimple(object) :
     def x_cvode(self,params):
         from assimulo.problem import Explicit_Problem
         from assimulo.solvers import CVode
-        func = self.create_dx(params)
+        func = self.create_dx(self.create_input_vector(params))
         problem = Explicit_Problem(lambda t,x:func(t,x)['f'](), [1.0,1.0,1.0],0)
         sim = CVode(problem)
         t,x = sim.simulate(250,len(self.time)-1)
@@ -114,8 +108,8 @@ class WorldSimple(object) :
                 columns=['population','burden','economy'],index=self.time)
         return dataframe
 
-    def create_ds(self,*args):
-        f = self.create_dx(*args)
+    def create_ds(self,p):
+        f = self.create_dx(p)
         dx = np.empty((21,))
         def func(t,x):
             _f = f(t,x[:3])
@@ -126,7 +120,7 @@ class WorldSimple(object) :
         return func
 
     def s_odeint(self,params):
-        func = self.create_ds(params)
+        func = self.create_ds(self.create_input_vector(params))
         s0 = np.ones(21)
         s0[3:]=0
         res,info = odeint(lambda s,t:func(t,s),s0, self.time,
@@ -139,7 +133,7 @@ class WorldSimple(object) :
     def s_cvode(self,params):
         from assimulo.problem import Explicit_Problem
         from assimulo.solvers import CVode
-        func = self.create_ds(params)
+        func = self.create_ds(self.create_input_vector(params))
         s0 = np.ones(21)
         s0[3:]=0
         problem = Explicit_Problem(lambda t,s:func(t,s),s0,1900)
