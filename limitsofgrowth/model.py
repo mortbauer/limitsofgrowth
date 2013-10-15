@@ -268,12 +268,16 @@ class WorldSimple(object) :
     def create_bnds(self):
         return [(self.params[p]['min'],self.params[p]['max']) for p in self.params]
 
-    def create_residum_func(self,weights={'economy':10,'population':1,'burden':1}):
+    def create_residum_func(self,weights={'economy':10,'population':1,'burden':1},x_callback=None):
         n = self.reference_data.shape[0]
         d = np.empty(n*3)
+        if not x_callback:
+            res = lambda p:self.x_odeint(func=self.create_dx(p))
+        else:
+            res = lambda p:x_callback(p)
         def residum(p):
             try:
-                diff = self.diff(self.x_odeint(func=self.create_dx(p)))
+                diff = self.diff(res(p))
                 for i,c in enumerate(diff):
                     d[i*n:i*n+n] = (diff[c]*weights[c])**2
             except Exception as e:
@@ -303,6 +307,14 @@ class WorldSimple(object) :
         return r
 
     def fit_with_data_bfgs(self,**kwargs):
+        func = self.create_residum_func(**kwargs)
+        r = optimize.fmin_l_bfgs_b(
+            lambda *args:linalg.norm(func(*args)),self.create_input_vector(self.initial),
+            bounds=self.create_bnds(),approx_grad=True,pgtol=1e-6
+        )
+        return r
+
+    def fit_with_data_bfgs_mod(self,**kwargs):
         func = self.create_residum_func(**kwargs)
         r = optimize.fmin_l_bfgs_b(
             lambda *args:linalg.norm(func(*args)),self.create_input_vector(self.initial),
