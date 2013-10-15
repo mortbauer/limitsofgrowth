@@ -306,7 +306,8 @@ class WorldSimpleGui(QtGui.QMainWindow):
         self.plot_dataframe(self.world.diff(self.world.x_odeint(self.optimized[0])),postfix=' diff')
 
     def plot_optimized(self):
-        x = self.world.x_odeint(self.optimized[0])
+        func = self.world.create_dx(self.optimized[0])
+        x = self.world.x_odeint(func=func)
         x = x/x.loc[1960]
         self.plot_dataframe(x.loc[self.world.reference_data.index],postfix=' optimized')
 

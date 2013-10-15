@@ -214,25 +214,26 @@ class WorldSimple(object) :
         return result.loc[self.reference_data.index]/result.loc[1960]-\
                 self.reference_data/self.reference_data.loc[1960]
 
+    def create_bnds(self):
+        return [(self.params[p]['min'],self.params[p]['max']) for p in self.params]
+
     def create_residum_func(self,weights={'economy':10,'population':1,'burden':1}):
-        initial = [self.initial[x] for x in self.params]
-        bnds = [(self.params[p]['min'],self.params[p]['max']) for p in self.params]
         n = self.reference_data.shape[0]
         d = np.empty(n*3)
         def residum(p):
             try:
-                result = self.x_odeint(p)
-                diff = self.diff(result)
+                diff = self.diff(self.x_odeint(func=self.create_dx(p)))
                 for i,c in enumerate(diff):
                     d[i*n:i*n+n] = (diff[c]*weights[c])**2
-            except:
+            except Exception as e:
                 d[:] += 10e6
-                logger.warn('failed to calc diff with p = {0}'.format(p))
+                print('######',e)
+                #logger.warn('failed to calc diff with p = {0}'.format(p))
             return d
-        return residum,initial,bnds
+        return residum
 
     def fit_with_data_basinhopping(self):
-        func,initial,bnds = self.create_residum_func()
+        func = self.create_residum_func()
         _min = np.array([bnd[0] for bnd in bnds])
         _max = np.array([bnd[1] for bnd in bnds])
 
@@ -241,26 +242,26 @@ class WorldSimple(object) :
             res =  bool(np.all(x<=_max)) and bool(np.all(x>=_min))
             return res
 
-        minimizer_kwargs = {"method":"L-BFGS-B", "jac":False,'bounds':bnds}
+        minimizer_kwargs = {"method":"L-BFGS-B", "jac":False,'bounds':self.create_bnds()}
         r = optimize.basinhopping(
             lambda *args:linalg.norm(func(*args)),
-            initial,accept_test=accept_test,
+            self.create_input_vector(self.initial),accept_test=accept_test,
             niter=100,minimizer_kwargs=minimizer_kwargs
         )
 
         return r
 
-    def fit_with_data_bfgs(self):
-        func,initial,bnds = self.create_residum_func()
+    def fit_with_data_bfgs(self,**kwargs):
+        func = self.create_residum_func(**kwargs)
         r = optimize.fmin_l_bfgs_b(
-            lambda *args:linalg.norm(func(*args)),initial,
-            bounds=bnds,approx_grad=True
+            lambda *args:linalg.norm(func(*args)),self.create_input_vector(self.initial),
+            bounds=self.create_bnds(),approx_grad=True,pgtol=1e-6
         )
         return r
 
     def fit_with_data_leastsq(self):
-        func,initial,bnds = self.create_residum_func()
-        r = optimize.leastsq(func,initial,full_output=True)
+        func = self.create_residum_func()
+        r = optimize.leastsq(func,self.create_input_vector(self.initial),full_output=True)
         return r
 
 
