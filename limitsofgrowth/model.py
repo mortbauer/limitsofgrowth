@@ -21,7 +21,7 @@ class WorldSimple(object) :
         ('deathrate',{'initial':0.01,'max':10,'min':0.01}),
         ('regenerationrate',{'initial':0.1,'max':10,'min':0.01}),
         ('burdenrate',{'initial':0.02,'max':10,'min':0.01}),
-        ('economyaim',{'initial':10,'max':100,'min':0.1}),
+        ('economyaim',{'initial':10,'max':10,'min':0.1}),
         ('growthrate',{'initial':0.05,'max':10,'min':0.01})
     ))
 
@@ -39,12 +39,16 @@ class WorldSimple(object) :
             for param in self.params:
                 self.sensitivities.append('{0},{1}'.format(column,param))
 
-
     def create_input_vector(self,params):
         return [params[param] for param in self.params]
 
-    def create_dx(self,p):
-        """ parameter vector p must be in correct order, to ensure this you can
+    @staticmethod
+    def birth_mod(p,x):
+        return p[0]*(1-x[2])*x[0]/x[1]*x[2]
+
+    @staticmethod
+    def create_dx(p,birth_callback=None):
+        """parameter vector p must be in correct order, to ensure this you can
         construct it throught the function create_input_vector which takes a
         dictionary as input
         """
@@ -55,8 +59,11 @@ class WorldSimple(object) :
             x: [population,burden,economy]
             """
             population,burden,economy = x
-            quality = x[1]**(-1)
-            birth = birthrate * population * quality * economy
+            quality = burden**(-1)
+            if not birth_callback:
+                birth = birthrate * population * quality * economy
+            else:
+                birth = birth_callback(p=p,x=x)
             death = population * deathrate * burden
             ecocide = burdenrate * economy * population
             if quality > 1:
@@ -88,8 +95,9 @@ class WorldSimple(object) :
             return {'f':f,'fx':fnachx,'fp':fnachp}
         return func
 
-    def x_odeint(self,params):
-        func = self.create_dx(self.create_input_vector(params))
+    def x_odeint(self,params={},func=None):
+        if not func:
+            func = self.create_dx(self.create_input_vector(params))
         res,info = odeint(lambda x,t:func(t,x)['f'](),[1.0,1.0,1.0], self.time,
                           full_output=True,printmessg=False,mxhnil=0)
         if info['message'] == "Integration successful.":

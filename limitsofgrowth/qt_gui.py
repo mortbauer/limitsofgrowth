@@ -247,6 +247,11 @@ class WorldSimpleGui(QtGui.QMainWindow):
         diff_button = QtGui.QPushButton('plot difference')
         diff_button.clicked.connect(self.plot_diff)
         ref_layout.addWidget(diff_button)
+        real_group = QtGui.QGroupBox('Simulation')
+        real_group_layout = QtGui.QVBoxLayout()
+        self.birth_mod = QtGui.QCheckBox('use modified birth')
+        real_group_layout.addWidget(self.birth_mod)
+        real_group.setLayout(real_group_layout)
         sens_group_layout.addWidget(sens_button)
         sens_group_layout.addWidget(sens_button_cv)
         sens_group_layout.addWidget(sens_button_cvn)
@@ -260,6 +265,7 @@ class WorldSimpleGui(QtGui.QMainWindow):
         layout.addWidget(self.plot_selector)
         layout.addWidget(sens_group)
         layout.addWidget(ref_group)
+        layout.addWidget(real_group)
         widget.setLayout(layout)
         self.tools.addTab(widget,'Plot Creation')
 
@@ -353,7 +359,12 @@ class WorldSimpleGui(QtGui.QMainWindow):
         oldvalue = self.parameters[str(param)]
         self.parameters[str(param)] = value
         t1 = time.time()
-        res = self.world.x_odeint(self.parameters)
+        inpv = self.world.create_input_vector(self.parameters)
+        if self.birth_mod.isChecked():
+            func=self.world.create_dx(inpv,birth_callback=self.world.birth_mod)
+        else:
+            func=self.world.create_dx(inpv)
+        res = self.world.x_odeint(func=func)
         if res:
             self.plot_dataframe(res)
             logger.info('recalculated in {0}s'.format(time.time()-t1))
