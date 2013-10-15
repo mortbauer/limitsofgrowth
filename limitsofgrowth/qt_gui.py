@@ -129,6 +129,8 @@ class WorldSimpleGui(QtGui.QMainWindow):
         self.world = WorldSimple(resolution=1000)
         self.parameters = {param:value['initial']
                             for param,value in self.world.params.items()}
+        self.parameters_mod = {'hic':self.parameters.copy(),'lic':self.parameters.copy()}
+
         self.dataframeplots['Realtime Simulation'] = DataFramePlot()
         self.dataframeplots['Realtime Simulation'].plot_all(
             self.world.x_odeint(self.parameters))
@@ -143,6 +145,7 @@ class WorldSimpleGui(QtGui.QMainWindow):
         self.addDockWidget(QtCore.Qt.RightDockWidgetArea,dock)
         # additional
         self.create_parameter_widget()
+        self.create_parameter_mod_widget()
         self.create_main_controls_widget()
         self.create_data_widget()
         self._add_plot_to_data_widget('Realtime Simulation')
@@ -250,6 +253,7 @@ class WorldSimpleGui(QtGui.QMainWindow):
         real_group = QtGui.QGroupBox('Simulation')
         real_group_layout = QtGui.QVBoxLayout()
         self.birth_mod = QtGui.QCheckBox('use modified birth')
+        self.mod_model = QtGui.QCheckBox('use modified model')
         real_group_layout.addWidget(self.birth_mod)
         real_group.setLayout(real_group_layout)
         sens_group_layout.addWidget(sens_button)
@@ -290,9 +294,49 @@ class WorldSimpleGui(QtGui.QMainWindow):
         widget.setLayout(layout)
         self.tools.addTab(widget,'Parameters')
 
+    def create_parameter_mod_widget(self):
+        self.sliders_mod = {'hic':{},'lic':{}}
+        widget = QtGui.QWidget()
+        widget2 = QtGui.QWidget()
+        widget.resize(400,widget.height())
+        layout = QtGui.QHBoxLayout()
+        layout2 = QtGui.QVBoxLayout()
+        layout_hic = QtGui.QVBoxLayout()
+        layout_lic = QtGui.QVBoxLayout()
+        group_hic = QtGui.QGroupBox('HIC')
+        group_lic = QtGui.QGroupBox('LIC')
+        make = lambda mod:lambda *args:self.change_mod(mod,*args)
+        for param in self.world.params:
+            value = self.world.params[param]
+            for mod in ('hic','lic'):
+                slider = Parameter(param,value=value['initial'],
+                                xmin=value['min'],xmax=value['max'],step=0.01)
+                slider.valueChanged.connect(make(mod))
+                if mod == 'hic':
+                    layout_hic.addWidget(slider)
+                else:
+                    layout_lic.addWidget(slider)
+                self.sliders_mod[mod][param]= slider
+        default_button = QtGui.QPushButton('Reset Parameters')
+        default_button.clicked.connect(self.reset_parameters_mod)
+        group_hic.setLayout(layout_hic)
+        group_lic.setLayout(layout_lic)
+        layout.addWidget(group_hic)
+        layout.addWidget(group_lic)
+        widget.setLayout(layout)
+        layout2.addWidget(widget)
+        layout2.addWidget(default_button)
+        widget2.setLayout(layout2)
+        self.tools.addTab(widget2,'Parameters Mod')
+
     def reset_parameters(self):
         for param,value in self.world.params.items():
             self.sliders[param].value = value['initial']
+
+    def reset_parameters_mod(self):
+        for param,value in self.world.params.items():
+            self.sliders_mod['hic'][param].value = value['initial']
+            self.sliders_mod['lic'][param].value = value['initial']
 
     @property
     def optimized(self):
@@ -315,8 +359,11 @@ class WorldSimpleGui(QtGui.QMainWindow):
         for i,param in enumerate(self.world.params):
             self.sliders[param].value = self.optimized[0][i]
 
-    def plot_dataframe(self,dataframe,postfix='',prefix=''):
-        selected_plot_name = str(self.plot_selector.currentText())
+    def plot_dataframe(self,dataframe,postfix='',prefix='', win=''):
+        if not win:
+            selected_plot_name = str(self.plot_selector.currentText())
+        else:
+            selected_plot_name = win
         if not selected_plot_name in self.dataframeplots:
             self.dataframeplots[selected_plot_name] = DataFramePlot(
                 window_title=selected_plot_name)
@@ -368,6 +415,19 @@ class WorldSimpleGui(QtGui.QMainWindow):
         res = self.world.x_odeint(func=func)
         if res:
             self.plot_dataframe(res)
+            logger.info('recalculated in {0}s'.format(time.time()-t1))
+        else:
+            logger.warn('failed with parameter "{0}" equal {1}'.format(param,value))
+
+    def change_mod(self,mod,param, value):
+        oldvalue = self.parameters_mod[mod][str(param)]
+        self.parameters_mod[mod][str(param)] = value
+        t1 = time.time()
+        res = self.world.x_odeint_mod(params=self.parameters_mod)
+        if res:
+            self.plot_dataframe(res[0],postfix=' hic',win='mod')
+            self.plot_dataframe(res[1],postfix=' lic',win='mod')
+            self.plot_dataframe((res[1]+res[0])/2,win='mod combined')
             logger.info('recalculated in {0}s'.format(time.time()-t1))
         else:
             logger.warn('failed with parameter "{0}" equal {1}'.format(param,value))

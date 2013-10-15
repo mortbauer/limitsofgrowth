@@ -95,6 +95,44 @@ class WorldSimple(object) :
             return {'f':f,'fx':fnachx,'fp':fnachp}
         return func
 
+    @staticmethod
+    def create_dx_mod(p_hic,p_lic):
+        """parameter vector p must be in correct order, to ensure this you can
+        construct it throught the function create_input_vector which takes a
+        dictionary as input
+        """
+        birthrate_hic,deathrate_hic,regenerationrate_hic,burdenrate_hic,economyaim_hic,growthrate_hic=p_hic
+        birthrate_lic,deathrate_lic,regenerationrate_lic,burdenrate_lic,economyaim_lic,growthrate_lic=p_lic
+        def func(time,x):
+            """
+            the change of the system variables population, burden and economy
+            x: [population,burden,economy]
+            """
+            population_hic,burden_hic,economy_hic,population_lic,burden_lic,economy_lic = x
+            quality_hic = burden_hic**(-1)
+            quality_lic = burden_lic**(-1)
+            birth_hic = birthrate_hic * population_hic * quality_hic * economy_hic
+            birth_lic = birthrate_lic * population_lic * quality_lic * economy_lic
+            death_hic = population_hic * deathrate_hic * burden_hic
+            death_lic = population_lic * deathrate_lic * burden_lic
+            ecocide_hic = burdenrate_hic * economy_hic * population_hic
+            ecocide_lic = burdenrate_lic * economy_lic * economy_hic * population_lic
+            if quality_hic > 1:
+                regeneration_hic = regenerationrate_hic * burden_hic
+            else:
+                regeneration_hic = regenerationrate_hic
+            if quality_lic > 1:
+                regeneration_lic = regenerationrate_lic * burden_lic
+            else:
+                regeneration_lic = regenerationrate_lic
+            economicgrowth_hic = growthrate_hic * economy_hic * burden_hic \
+                    * (1-(economy_hic*burden_hic)/economyaim_hic)
+            economicgrowth_lic = growthrate_lic * economy_lic * burden_lic \
+                    * (1-(economy_lic*burden_lic)/economyaim_lic)
+            return [birth_hic-death_hic,ecocide_hic-regeneration_hic,economicgrowth_hic,
+                    birth_lic-death_lic,ecocide_lic-regeneration_lic,economicgrowth_lic]
+        return func
+
     def x_odeint(self,params={},func=None):
         if not func:
             func = self.create_dx(self.create_input_vector(params))
@@ -104,6 +142,19 @@ class WorldSimple(object) :
             dataframe = pandas.DataFrame(res,
                 columns=['population','burden','economy'],index=self.time)
             return dataframe
+
+    def x_odeint_mod(self,params={},func=None):
+        if not func:
+            func = self.create_dx_mod(self.create_input_vector(params['hic']),
+                                      self.create_input_vector(params['lic']))
+        res,info = odeint(lambda x,t:func(t,x),[1.0,1.0,1.0,1.0,1.0,1.0], self.time,
+                          full_output=True,printmessg=False,mxhnil=0)
+        if info['message'] == "Integration successful.":
+            dataframe_hic = pandas.DataFrame(res[:,:3],
+                columns=['population','burden','economy'],index=self.time)
+            dataframe_lic = pandas.DataFrame(res[:,3:],
+                columns=['population','burden','economy'],index=self.time)
+            return dataframe_hic,dataframe_lic
 
     def x_cvode(self,params):
         from assimulo.problem import Explicit_Problem
