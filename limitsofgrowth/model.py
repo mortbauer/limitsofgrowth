@@ -315,10 +315,14 @@ class WorldSimple(object) :
         return r
 
     def fit_with_data_bfgs_mod(self,**kwargs):
-        func = self.create_residum_func(**kwargs)
+        def callback(p):
+            f = self.create_dx_mod(p[:6],p[6:])
+            x_hic,x_lic = self.x_odeint_mod(func=f)
+            return x_hic+x_lic
+        func = self.create_residum_func(x_callback=callback,**kwargs)
         r = optimize.fmin_l_bfgs_b(
-            lambda *args:linalg.norm(func(*args)),self.create_input_vector(self.initial),
-            bounds=self.create_bnds(),approx_grad=True,pgtol=1e-6
+            lambda *args:linalg.norm(func(*args)),self.create_input_vector(self.initial)*2,
+            bounds=self.create_bnds()*2,approx_grad=True,pgtol=1e-6
         )
         return r
 
