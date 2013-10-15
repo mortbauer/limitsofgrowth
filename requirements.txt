@@ -2,5 +2,4 @@ assimulo
 pandas
 numpy
 scipy
-pyqtgraph
 colors.py
