@@ -44,7 +44,11 @@ class WorldSimple(object) :
 
     @staticmethod
     def birth_mod(p,x):
-        return p[0]*(1-x[2])*x[0]/x[1]*x[2]
+        fac = 1-(x[2]-1)/p[4]
+        if fac >=0:
+            return p[0]*fac*x[0]/x[1]*x[2]
+        else:
+            return p[0]*0.1*x[0]/x[1]*x[2]
 
     @staticmethod
     def create_dx(p,birth_callback=None):
