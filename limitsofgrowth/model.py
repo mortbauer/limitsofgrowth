@@ -29,7 +29,14 @@ class WorldSimple(object) :
 
     reference_data_names = {'population':'SP.POP.TOTL',
                             'economy':'NY.GDP.MKTP.CD',
-                            'burden':'EN.ATM.CO2E.KT'}
+                            'burden':'EN.ATM.CO2E.KT',
+                            }
+
+    reference_parameters = {'birthrate':{'name':'SP.DYN.CBRT.IN','per':1000},
+                            'deathrate':{'name':'SP.DYN.CDRT.IN','per':1000},
+                            'burdenrate':{'name':'EN.ATM.CO2E.KT','per':'SP.POP.TOTL'},
+                            }
+
     time = np.arange(1900,1900+250+1,1)
 
     def __init__(self, resolution=250):
@@ -38,6 +45,17 @@ class WorldSimple(object) :
         for column in self.cols:
             for param in self.params:
                 self.sensitivities.append('{0},{1}'.format(column,param))
+
+    def get_ref_parameters(self,country,year=1960):
+        d = {}
+        for param,v in self.reference_parameters.items():
+            if isinstance(v['per'],str):
+                per = self._reference_data(country)[v['per']]
+            else:
+                per = v['per']
+            d[param] = (self._reference_data(country)[v['name']]/per).loc[year]
+        return d
+
 
     def create_input_vector(self,params):
         return [params[param] for param in self.params]
@@ -147,11 +165,13 @@ class WorldSimple(object) :
                 columns=['population','burden','economy'],index=self.time)
             return dataframe
 
-    def x_odeint_mod(self,params={},func=None):
+    def x_odeint_mod(self,params=(),func=None,x0={}):
         if not func:
-            func = self.create_dx_mod(self.create_input_vector(params['hic']),
-                                      self.create_input_vector(params['lic']))
-        res,info = odeint(lambda x,t:func(t,x),[1.0,1.0,1.0,1.0,1.0,1.0], self.time,
+            func = self.create_dx_mod(self.create_input_vector(params[0]),
+                                      self.create_input_vector(params[1]))
+        if not x0:
+            x0 = np.ones(6)
+        res,info = odeint(lambda x,t:func(t,x),x0, self.time,
                           full_output=True,printmessg=False,mxhnil=0)
         if info['message'] == "Integration successful.":
             dataframe_hic = pandas.DataFrame(res[:,:3],
@@ -254,34 +274,36 @@ class WorldSimple(object) :
             i += 1
         return sol
 
-    @property
-    def reference_data(self):
-        if not hasattr(self,'_reference_data'):
+    def _reference_data(self,country):
+        if not hasattr(self,'_wc'):
             wc = WorldBankClient()
             wc.load_from_hdf(resource_filename(__name__,'data/world_indicators.hdf'))
-            d = wc.indicators_by_countries('HIC')
-            d.index = d.index.astype(np.int)
-            self._reference_data = d.rename_axis(
-                {v:key for key,v in self.reference_data_names.items()})
-        return self._reference_data
+            self._wc = wc
+        d = self._wc.indicators_by_countries(country)
+        d.index = d.index.astype(np.int)
+        return d
 
-    def diff(self,result):
-        return result.loc[self.reference_data.index]/result.loc[1960]-\
-                self.reference_data/self.reference_data.loc[1960]
+    def reference_data(self,country):
+        return self._reference_data(country).rename_axis(
+            {v:key for key,v in self.reference_data_names.items()})
+
 
     def create_bnds(self):
         return [(self.params[p]['min'],self.params[p]['max']) for p in self.params]
 
-    def create_residum_func(self,weights={'economy':10,'population':1,'burden':1},x_callback=None):
-        n = self.reference_data.shape[0]
+    def create_residum_func(self,ref,weights={
+        'economy':10,'population':1,'burden':1},x_callback=None):
+        n = self.reference_data('WLD').shape[0]
         d = np.empty(n*3)
         if not x_callback:
             res = lambda p:self.x_odeint(func=self.create_dx(p))
         else:
             res = lambda p:x_callback(p)
+        norm_ref = ref/ref.loc[1960]
         def residum(p):
             try:
-                diff = self.diff(res(p))
+                r = res(p)
+                diff = r.loc[norm_ref.index]/r.loc[1960]-norm_ref
                 for i,c in enumerate(diff):
                     d[i*n:i*n+n] = (diff[c]*weights[c])**2
             except Exception as e:
@@ -291,8 +313,8 @@ class WorldSimple(object) :
             return d
         return residum
 
-    def fit_with_data_basinhopping(self):
-        func = self.create_residum_func()
+    def fit_with_data_basinhopping(self,country='WLD'):
+        func = self.create_residum_func(self.reference_data(country))
         _min = np.array([bnd[0] for bnd in bnds])
         _max = np.array([bnd[1] for bnd in bnds])
 
@@ -310,31 +332,52 @@ class WorldSimple(object) :
 
         return r
 
-    def fit_with_data_bfgs(self,**kwargs):
-        func = self.create_residum_func(**kwargs)
+    def fit_with_data_bfgs(self,country='WLD',**kwargs):
+        func = self.create_residum_func(self.reference_data(country),**kwargs)
         r = optimize.fmin_l_bfgs_b(
             lambda *args:linalg.norm(func(*args)),self.create_input_vector(self.initial),
             bounds=self.create_bnds(),approx_grad=True,pgtol=1e-6
         )
         return r
 
-    def fit_with_data_bfgs_mod(self,**kwargs):
+    def fit_with_data_bfgs_mod(self,country='WLD',**kwargs):
+        w = self
+        rel = w.reference_data('HIC').loc[1960]/w.reference_data('LMY').loc[1960]
+        x0_lic = (rel+1)**(-1)
+        x0_hic = x0_lic*rel
+        p_hic = w.initial.copy()
+        p_lic = w.initial.copy()
+        x0 = [x0_hic[c] for c in w.cols]+[x0_lic[c] for c in w.cols]
+
         def callback(p):
-            f = self.create_dx_mod(p[:6],p[6:])
+            x0[2]=p[0]
+            x0[4]=p[1]
+            x0[5]=p[3]
+            x0[8]=p[4]
+            x0[10]=p[5]
+            x0[11]=p[6]
+            f = self.create_dx_mod(x0[:6],x0[6:])
             x_hic,x_lic = self.x_odeint_mod(func=f)
             return x_hic+x_lic
-        func = self.create_residum_func(x_callback=callback,**kwargs)
+        func = self.create_residum_func(self.reference_data(country),x_callback=callback,**kwargs)
         r = optimize.fmin_l_bfgs_b(
-            lambda *args:linalg.norm(func(*args)),self.create_input_vector(self.initial)*2,
+            lambda p:linalg.norm(func(p)),np.ones(6),
             bounds=self.create_bnds()*2,approx_grad=True,pgtol=1e-6
         )
         return r
 
-    def fit_with_data_leastsq(self):
-        func = self.create_residum_func()
+    def fit_with_data_leastsq(self,country='WLD'):
+        func = self.create_residum_func(self.reference_data(country))
         r = optimize.leastsq(func,self.create_input_vector(self.initial),full_output=True)
         return r
 
+    def co2_contentration(self):
+        d = pandas.read_csv(
+            resource_filename(__name__,'data/monthly_mlo.csv'),
+            skiprows=54,header=[2,0,1],index_col=0,
+        )
+        return d.loc[self.reference_data('WLD').index].icol(-1).groupby(level=0).mean()
+        #return d[d[(' seasonally', 'adjusted filled', '    [ppm]')]>0][(' seasonally', 'adjusted filled', '    [ppm]')]
 
 class WorldBankClient(object):
     _REGION_CODES = 'http://worldbank.270a.info/classification/region.html'

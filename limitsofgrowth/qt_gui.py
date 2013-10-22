@@ -6,7 +6,7 @@ import time
 from colors import ColorWheel
 from pyqtgraph.Qt import QtGui, QtCore
 import pyqtgraph as pg
-
+import numpy as np
 import logging
 import gettext
 from pkg_resources import resource_filename
@@ -88,7 +88,7 @@ class Parameter(QtGui.QGroupBox):
         self.textbox.setMaxLength(30)
         self.textbox.setFixedWidth(60)
         self.textbox.setText(str(value))
-        self.textbox.setValidator(QtGui.QDoubleValidator(0.0,float(neededsteps),3))
+        self.textbox.setValidator(QtGui.QDoubleValidator(0.0,float(neededsteps),5))
         layout.addWidget(self.textbox)
         layout.addWidget(self.slider)
         self.setLayout(layout)
@@ -140,9 +140,9 @@ class WorldSimpleGui(QtGui.QMainWindow):
         self.mainplot = self.dataframeplots['Realtime Simulation']
         self.resize(1000,600)
         self.tools = QtGui.QTabWidget()
-        dock = QtGui.QDockWidget('Controllers')
-        dock.setWidget(self.tools)
-        self.addDockWidget(QtCore.Qt.RightDockWidgetArea,dock)
+        #dock = QtGui.QDockWidget('Controllers')
+        #dock.setWidget(self.tools)
+        #self.addDockWidget(QtCore.Qt.RightDockWidgetArea,dock)
         # additional
         self.create_parameter_widget()
         self.create_parameter_mod_widget()
@@ -151,6 +151,7 @@ class WorldSimpleGui(QtGui.QMainWindow):
         self._add_plot_to_data_widget('Realtime Simulation')
         self.opt_basinhopping = [  1.00227541e-02,   9.36331825e+00,   1.00000000e+01,
          2.23513971e-02,   9.93493979e+01,   5.95912808e-01]
+
 
     def _remove_plot_to_data_widget(self,name):
         self.data_widget.removeTopLevelItem(self.data_tree.pop(name)['item'])
@@ -231,8 +232,10 @@ class WorldSimpleGui(QtGui.QMainWindow):
         layout = QtGui.QVBoxLayout()
         sens_group = QtGui.QGroupBox('Sensitivity Analysis')
         sens_group_layout = QtGui.QVBoxLayout()
+        sens_pseudo_button = QtGui.QPushButton('pseudo Sensitivity')
+        sens_pseudo_button.clicked.connect(self.plot_pseudo_sensitivity_analysis)
         sens_button = QtGui.QPushButton('scipy.odeint simultaneous')
-        sens_button.clicked.connect(self.plot_sensitivity)
+        sens_button.clicked.connect(self.plot_real_sensitivity_analysis)
         sens_button_cv = QtGui.QPushButton('assimulo.cvode simultaneous')
         sens_button_cv.clicked.connect(self.plot_sensitivity_cvode)
         sens_button_cvn = QtGui.QPushButton('assimulo.cvode natural')
@@ -256,6 +259,7 @@ class WorldSimpleGui(QtGui.QMainWindow):
         self.mod_model = QtGui.QCheckBox('use modified model')
         real_group_layout.addWidget(self.birth_mod)
         real_group.setLayout(real_group_layout)
+        sens_group_layout.addWidget(sens_pseudo_button)
         sens_group_layout.addWidget(sens_button)
         sens_group_layout.addWidget(sens_button_cv)
         sens_group_layout.addWidget(sens_button_cvn)
@@ -281,7 +285,7 @@ class WorldSimpleGui(QtGui.QMainWindow):
         for param in self.world.params:
             value = self.world.params[param]
             slider = Parameter(param,value=value['initial'],
-                               xmin=value['min'],xmax=value['max'],step=0.01)
+                               xmin=value['min'],xmax=value['max'],step=0.0001)
             slider.valueChanged.connect(self.change)
             layout.addWidget(slider)
             self.sliders[param] = slider
@@ -310,7 +314,7 @@ class WorldSimpleGui(QtGui.QMainWindow):
             value = self.world.params[param]
             for mod in ('hic','lic'):
                 slider = Parameter(param,value=value['initial'],
-                                xmin=value['min'],xmax=value['max'],step=0.01)
+                                xmin=value['min'],xmax=value['max'],step=0.0001)
                 slider.valueChanged.connect(make(mod))
                 if mod == 'hic':
                     layout_hic.addWidget(slider)
@@ -335,8 +339,11 @@ class WorldSimpleGui(QtGui.QMainWindow):
 
     def reset_parameters_mod(self):
         for param,value in self.world.params.items():
-            self.sliders_mod['hic'][param].value = value['initial']
-            self.sliders_mod['lic'][param].value = value['initial']
+            for part,n in {'HIC':'hic','LMY':'lic'}.items():
+                if param in self.world.get_ref_parameters(part):
+                    self.sliders_mod[n][param].value = round(self.world.get_ref_parameters(part)[param],3)
+                else:
+                    self.sliders_mod[n][param].value = value['initial']
 
     @property
     def optimized(self):
@@ -372,13 +379,27 @@ class WorldSimpleGui(QtGui.QMainWindow):
         self.dataframeplots[selected_plot_name].plotwidget.show()
         self._add_plot_to_data_widget(selected_plot_name)
 
-    def plot_sensitivity(self):
+    def plot_real_sensitivity_analysis(self):
         try:
             s = self.world.s_odeint(self.parameters)
             data = s[['{0},economyaim'.format(x) for x in self.world.cols]]
             self.plot_dataframe(data,postfix=' odeint')
         except:
             logger.warn('no solution for sensitivities found')
+
+    def plot_pseudo_sensitivity_analysis(self):
+        p = self.parameters.copy()
+        self.dataframeplots['pseudo_sens'] =d= {
+             'population':DataFramePlot(window_title='population'),
+             'economy':DataFramePlot(window_title='economy'),
+             'burden':DataFramePlot(window_title='burden')}
+        for i in np.linspace(0.01,10,50):
+            p['economyaim'] = i
+            x = self.world.x_odeint(params=p)
+            if x:
+                for col in x:
+                    d[col].plot_single(
+                        x.index,x[col],'{0}, economyaim = {1}'.format(col,i))
 
     def plot_sensitivity_cvode_natural(self):
         try:
@@ -419,15 +440,29 @@ class WorldSimpleGui(QtGui.QMainWindow):
         else:
             logger.warn('failed with parameter "{0}" equal {1}'.format(param,value))
 
+
+    @property
+    def _x0_mod(self):
+        if not hasattr(self,'__x0_mod'):
+            w = self.world
+            rel = w.reference_data('HIC').loc[1960]/w.reference_data('LMY').loc[1960]
+            x0_lic = (rel+1)**(-1)
+            x0_hic = x0_lic*rel
+            p_hic = w.initial.copy()
+            p_lic = w.initial.copy()
+            self.__x0_mod = [x0_hic[c] for c in w.cols]+[x0_lic[c] for c in w.cols]
+        return self.__x0_mod
+
     def change_mod(self,mod,param, value):
         oldvalue = self.parameters_mod[mod][str(param)]
         self.parameters_mod[mod][str(param)] = value
         t1 = time.time()
-        res = self.world.x_odeint_mod(params=self.parameters_mod)
+        res = self.world.x_odeint_mod(params=(self.parameters_mod['hic'],self.parameters_mod['lic']),x0=self._x0_mod)
+
         if res:
             self.plot_dataframe(res[0],postfix=' hic',win='mod')
             self.plot_dataframe(res[1],postfix=' lic',win='mod')
-            self.plot_dataframe((res[1]+res[0])/2,win='mod combined')
+            self.plot_dataframe((res[1]+res[0]),win='mod combined')
             logger.info('recalculated in {0}s'.format(time.time()-t1))
         else:
             logger.warn('failed with parameter "{0}" equal {1}'.format(param,value))
@@ -436,6 +471,7 @@ class WorldSimpleGui(QtGui.QMainWindow):
 def main():
     m = WorldSimpleGui()
     m.show()
+    m.tools.show()
     qt_app.exec_()
 
 def get_reference_data():
